@@ -2,12 +2,12 @@
 
 **Status: in progress.**
 
-A Discord bot that handles meeting disclaimers and participant registration. Users in a voice channel can start a session, accept or reject a disclaimer via buttons, and close the session when the meeting is over.
+A Discord bot that transcribes and summarizes meetings.
 
-## Features
+## Present Features
 
 - **/start** — Start a meeting session from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. Only one active session per voice channel.
-- **/close** — End the session and delete session data. Only participants who have accepted the disclaimer can close.
+- **/close** — End the session and delete session data. Only meeting participants can close.
 - Disclaimer flow with a one-minute timeout; if not everyone accepts in time, the session is aborted.
 - Session state stored in memory (no database).
 
@@ -45,8 +45,6 @@ The file `.env-example` lists the required environment variables. After copying 
 | `APP_ID`        | Application ID (Developer Portal → General Information) |
 | `SERVER_ID`     | Guild (server) ID where you want to register slash commands |
 | `PUBLIC_KEY`    | Your application's public key (Developer Portal → General Information) |
-
-Never commit `.env`; it is listed in `.gitignore`. Commit `.env-example` so others know which variables are needed.
 
 ## Usage
 
