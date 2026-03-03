@@ -1,15 +1,47 @@
+import io
 import os
+import time
+import base64
 
-from fastapi import FastAPI 
+from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, WhisperError
+from pydantic import BaseModel
+
+class Segment(BaseModel):
+    segmentIndex: int
+    startMs: int
+    endMs: int
+    text: str
+
+class Metrics(BaseModel):
+    chunkDurationMs: int
+    processingMs: int
+    realTimeFactor: float
+
+class TranscribeRequest(BaseModel):
+    meetingId: str
+    chunkId: int
+    participantId: str
+    chunkStartTimeMs: int
+    chunkEndTimeMs: int
+    audio: str
+
+class TranscribeResponse(BaseModel):
+    meetingId: str
+    chunkId: int
+    participantId: str
+    segments: list[Segment]
+    metrics: Metrics
 
 load_dotenv()
 
 model_id = os.getenv("STT_MODEL_ID")
 download_path = os.getenv("STT_DOWNLOAD_PATH")
-use_local = os.getenv("STT_USE_LOCAL").strip().lower() == "true"
+raw = os.getenv("STT_USE_LOCAL", "")
+use_local = raw.strip().lower() == "true"
 device_flag = os.getenv("STT_DEVICE") if os.getenv("STT_DEVICE") else "auto"
+language_flag = os.getenv("STT_LANGUAGE") if os.getenv("STT_LANGUAGE") else ""
 
 app = FastAPI(
     title="STT Wrapper",
@@ -42,6 +74,40 @@ def health():
             "device": getattr(app.state, "device", None),
     }
 
+@app.post("/transcribe")
+async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
+    model = app.state.model
+    try:
+        audio_bytes = base64.b64decode(request.audio)
+        audio_stream = io.BytesIO(audio_bytes)
 
+        t0 = time.perf_counter()
+        segments, info = model.transcribe(audio_stream, language="pt")
+        processing_ms = int((time.perf_counter() - t0) * 1000)
+        duration_ms = int(info.duration * 1000)
+        real_time_factor = processing_ms / duration_ms if duration_ms > 0 else 0.0
+        metrics = Metrics(
+            chunkDurationMs=duration_ms,
+            processingMs=processing_ms, 
+            realTimeFactor=real_time_factor)
 
+        segments = [
+            Segment(
+                segmentIndex=i, 
+                startMs=request.chunkStartTimeMs + int(segment.start * 1000), 
+                endMs=request.chunkStartTimeMs + int(segment.end * 1000), 
+                text=segment.text
+                ) for i, segment in enumerate(list(segments))]
 
+        response = TranscribeResponse(
+            meetingId=request.meetingId,
+            chunkId=request.chunkId,
+            participantId=request.participantId,
+            segments=segments,
+            metrics=metrics)
+        return response
+
+    except WhisperError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

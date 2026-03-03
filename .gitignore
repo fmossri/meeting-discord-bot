@@ -21,6 +21,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 .eggs/
+repl.py
 
 # Test / generated assets (large or machine-specific)
 tests/audio-samples/
