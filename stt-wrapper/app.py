@@ -5,7 +5,7 @@ import base64
 
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
-from faster_whisper import WhisperModel, WhisperError
+from faster_whisper import WhisperModel
 from pydantic import BaseModel
 
 class Segment(BaseModel):
@@ -78,19 +78,10 @@ def health():
 async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     model = app.state.model
     try:
+        t0 = time.perf_counter()
         audio_bytes = base64.b64decode(request.audio)
         audio_stream = io.BytesIO(audio_bytes)
-
-        t0 = time.perf_counter()
         segments, info = model.transcribe(audio_stream, language="pt")
-        processing_ms = int((time.perf_counter() - t0) * 1000)
-        duration_ms = int(info.duration * 1000)
-        real_time_factor = processing_ms / duration_ms if duration_ms > 0 else 0.0
-        metrics = Metrics(
-            chunkDurationMs=duration_ms,
-            processingMs=processing_ms, 
-            realTimeFactor=real_time_factor)
-
         segments = [
             Segment(
                 segmentIndex=i, 
@@ -98,6 +89,13 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
                 endMs=request.chunkStartTimeMs + int(segment.end * 1000), 
                 text=segment.text
                 ) for i, segment in enumerate(list(segments))]
+        processing_ms = int((time.perf_counter() - t0) * 1000)
+        duration_ms = int(info.duration * 1000)
+        real_time_factor = processing_ms / duration_ms if duration_ms > 0 else 0.0
+        metrics = Metrics(
+            chunkDurationMs=duration_ms,
+            processingMs=processing_ms, 
+            realTimeFactor=real_time_factor)
 
         response = TranscribeResponse(
             meetingId=request.meetingId,
@@ -107,7 +105,5 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
             metrics=metrics)
         return response
 
-    except WhisperError as e:
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

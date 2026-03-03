@@ -24,6 +24,7 @@ def test(audio_files: list[str]) -> None:
 
     for audio_file in audio_files:
         t0 = time.perf_counter()
+        print("t0 type: ", type(t0))
         segments, info = model.transcribe(audio_file, language="pt")
         segments = list(segments)
         processing_s = time.perf_counter() - t0
