@@ -17,19 +17,18 @@ A Discord bot that implements STT and summarization capabilities.
 
 - Per-meeting queue and HTTP client to the STT wrapper; appends transcription results to a JSONL file per meeting.
 - Standalone HTTP server (`services/worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Smoke test: `scripts/transcript-worker/test-from-disk.js` (feeds WAV files from disk).
-- Documented in `docs/TRANSCRIPT-WORKER.md`.
 
 ### Discord bot (Node.js) — session and interface
 
-- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel. **in progress**
+- **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
 - **`/close`** — End the session and delete session data. Only participants can close.
-- Session state stored in memory (no database). Voice capture and sending chunks to the Worker are not yet wired.
+- Session state stored in memory (no database). Voice capture, per‑participant chunking, and sending chunks to the Worker are wired via `services/voice-manager/session-voice-manager.js`.
 
 ---
 
 ## Intended flow
 
-After participants accept the disclaimer, the bot captures audio from the voice channel, sends it (via the Worker) to the STT service for transcription, receives the full transcript, then sends it to an LLM for summarization. **Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server). **Next:** Bot voice capture, decode & chunk and send to Worker, then session end and LLM summarization.
+After participants accept the disclaimer, the bot captures audio from the voice channel, sends it (via the Worker) to the STT service for transcription, receives the full transcript, then sends it to an LLM for summarization. **Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server); bot voice capture, per‑participant decode & chunk, and sending chunks to the Worker. **Next:** Session end flow on `/close` (use transcript path, pretty‑print transcript, call LLM) and stronger integration/testing.
 
 ---
 
@@ -167,6 +166,7 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
 | `services/worker/transcript-worker.js` | Transcript Worker: per-meeting queue, STT client, JSONL transcript |
 | `services/worker/index.js` | Transcript Worker HTTP server: `/start-meeting`, `/enqueue-chunk`, `/close-meeting` |
+| `services/voice-manager/session-voice-manager.js` | Discord voice session manager: join voice channel, capture participant audio, chunk, and send chunks to Worker |
 | `scripts/transcript-worker/test-from-disk.js` | Smoke test: feed WAV files from disk through the Worker (start → enqueue → close → preview transcript) |
 | `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
 | `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |

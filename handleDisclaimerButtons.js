@@ -2,10 +2,11 @@ const { MessageFlags } = require('discord.js');
 const { sessionStore } = require('./session.js');
 
 const handleDisclaimerButtons = async (interaction) => {
-	const session = sessionStore.getSessionByMessageId(interaction.message.id);
+    const messageId = interaction.message.id;
+	const session = sessionStore.getSessionById(messageId);
 
 	if (!session) {
-		console.log('no session found.', interaction.message.id);
+		console.log('no session found.', messageId);
 		await interaction.deferUpdate();
 		return;
 	}
@@ -26,7 +27,7 @@ const handleDisclaimerButtons = async (interaction) => {
 				await session.originalInteraction.followUp({
 					content: 'All users have accepted the disclaimer. Starting recording.',
 				});
-
+                interaction.client.sessionVoiceManager.startVoiceCapture(messageId);
 				return;
 			}
 		}

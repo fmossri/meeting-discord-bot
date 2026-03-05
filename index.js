@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { Client, Collection, GatewayIntentBits } = require('discord.js');
+const { createSessionVoiceManager } = require('./services/voice-manager/session-voice-manager.js');
 
 require('dotenv').config();
 const { DISCORD_TOKEN: token } = process.env;
@@ -9,6 +10,7 @@ const { DISCORD_TOKEN: token } = process.env;
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 
+client.sessionVoiceManager = createSessionVoiceManager();
 client.commands = new Collection();
 const foldersPath = path.join(__dirname, 'commands');
 const commandFolders = fs.readdirSync(foldersPath);

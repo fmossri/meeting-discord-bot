@@ -22,7 +22,7 @@ describe('sessionStore', () => {
                 originalInteraction: 'interaction',
                 timeoutId: null,
             });
-            expect(sessionStore.getSessionByMessageId('123')).toEqual({
+            expect(sessionStore.getSessionById('123')).toEqual({
                 participantIds: ['123', '456', '789'],
                 voiceChannelId: '123',
                 acceptedIds: [],
@@ -33,14 +33,14 @@ describe('sessionStore', () => {
         });
         it('deletes a session', () => {
             sessionStore.deleteSession('234');
-            expect(sessionStore.getSessionByMessageId('234')).toBeUndefined();
+            expect(sessionStore.getSessionById('234')).toBeUndefined();
         });
         it('returns undefined when delete session not found', () => {
             expect(sessionStore.deleteSession('123')).toBeUndefined();
         });
         it('clears all sessions', () => {   
             sessionStore.clearSessions();
-            expect(sessionStore.getSessionByMessageId('234')).toBeUndefined();
+            expect(sessionStore.getSessionById('234')).toBeUndefined();
             expect(sessionStore.channelHasSession('432')).toBe(false);
             expect(sessionStore.findSessionByChannelId('432')).toBeNull();
         });
@@ -63,7 +63,7 @@ describe('sessionStore', () => {
             expect(sessionStore.findSessionByChannelId('123')).toBeNull();
         });
         it('gets a session by message id', () => {
-            expect(sessionStore.getSessionByMessageId('234')).toEqual({
+            expect(sessionStore.getSessionById('234')).toEqual({
                 participantIds: ['123', '456', '789'],
                 voiceChannelId: '432',
                 acceptedIds: [],
@@ -73,7 +73,7 @@ describe('sessionStore', () => {
             });
         });
         it('returns underfined when get session by message id not found', () => {
-            expect(sessionStore.getSessionByMessageId('123')).toBeUndefined();
+            expect(sessionStore.getSessionById('123')).toBeUndefined();
         });
         it('gets a session by channel id', () => {
             expect(sessionStore.getSessionByChannelId('432')).toEqual({

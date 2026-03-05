@@ -38,6 +38,7 @@ module.exports = {
 			return;
 		}
 
+		await interaction.client.sessionVoiceManager.stopVoiceCapture(session.sessionId, true);
 		await interaction.reply({
 			content: 'The meeting is over. Thank you for participating.',
 		});

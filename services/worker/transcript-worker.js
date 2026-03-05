@@ -80,8 +80,8 @@ function createTranscriptWorker({sttBaseUrl, fetchImpl, fsImpl, pathImpl}) {
             }
             chunk = {
                 chunkId: chunk.chunkId,
-                participantId: chunk.participantId,
-                displayName: chunk.displayName,
+                participantId: chunk.participantData.participantId,
+                displayName: chunk.participantData.displayName,
                 chunkStartTimeMs: chunk.chunkStartTimeMs,
                 chunkEndTimeMs: chunk.chunkEndTimeMs,
                 audioBytes: chunk.audio,

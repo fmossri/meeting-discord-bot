@@ -45,7 +45,7 @@ module.exports = {
 
 		const replyMessage = await interactionResponse.fetch();
 		const messageId = replyMessage.id;
-		const sessionData = {
+		const sessionState = {
 			participantIds,
 			voiceChannelId: voiceChannel.id,
 			acceptedIds: [],
@@ -53,10 +53,10 @@ module.exports = {
 			originalInteraction: interaction,
 			timeoutId: null,
 		};
-		sessionStore.createSession(messageId, sessionData);
+		sessionStore.createSession(messageId, sessionState);
 
 		const sessionTimeoutId = setTimeout(async () => {
-			const session = sessionStore.getSessionByMessageId(messageId);
+			const session = sessionStore.getSessionById(messageId);
 			if (session) {
 				await session.originalInteraction.followUp({
 					content: 'Session timed out after 1 minute. All participants must accept to start the meeting.',

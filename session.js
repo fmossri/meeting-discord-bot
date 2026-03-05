@@ -2,33 +2,33 @@ const sessions = new Map();
 
 const sessionStore = {
 
-	createSession(messageId, sessionData) {
-		sessions.set(messageId, sessionData);
+	createSession(sessionId, sessionData) {
+		sessions.set(sessionId, sessionData);
 		console.log('debug message: session created!');
 	},
 	findSessionByChannelId(channelId) {
-		for (const [messageId, sessionData] of sessions.entries()) {
+		for (const [sessionId, sessionData] of sessions.entries()) {
 			if (sessionData.voiceChannelId === channelId) {
-				return { messageId, sessionData };
+				return { sessionId, sessionData };
 			}
 		}
 		return null;
 	},
 
-	getSessionByMessageId(messageId) {
-		return sessions.get(messageId);
+	getSessionById(sessionId) {
+		return sessions.get(sessionId);
 	},
 
 	getSessionByChannelId(channelId) {
 		return this.findSessionByChannelId(channelId);
 	},
-	deleteSession(messageId) {
-		if (!sessions.has(messageId)) {
-			console.log('no session found by message id.', messageId);
+	deleteSession(sessionId) {
+		if (!sessions.has(sessionId)) {
+			console.log('no session found by message id.', sessionId);
 			return;
 		}
-		sessions.delete(messageId);
-		console.log('session deleted by message id.', messageId);
+		sessions.delete(sessionId);
+		console.log('session deleted by message id.', sessionId);
 	},
 
 	channelHasSession(channelId) {
