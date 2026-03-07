@@ -25,6 +25,8 @@ repl.py
 
 # Test / generated assets (large or machine-specific)
 tests/audio-samples/
+services/transcript-worker/transcripts/*.jsonl
+reports/*.md
 
 # Optional: comment out if you want to track docs and eslint config in git
 docs/

@@ -1,6 +1,6 @@
 # discord-meeting-bot
 
-**Status: in progress.**
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Test suite in place (unit + integration); docs and roadmap in `docs/` (see .gitignore).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -12,7 +12,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 - **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
-- Session state stored in memory (no database). Voice capture, per‑participant chunking, and sending chunks to the Worker are coordinated by the session manager (`services/session-manager/session-manager.js`).
+- Session state stored in memory (no database). A **coordinator** (`coordinator/bot-coordinator.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
 
 ### STT wrapper (Python)
 
@@ -21,8 +21,8 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Transcript worker (Node.js)
 
-- Per-meeting queue and HTTP client to the STT wrapper; appends transcription results to a JSONL file per meeting.
-- Standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Smoke test: `scripts/transcript-worker/test-from-disk.js` (feeds WAV files from disk).
+- Per-meeting queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting (header at close). API: `startTranscript`, `enqueueChunk`, `closeTranscript`.
+- Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-meeting`**, **`/enqueue-chunk`**, **`/close-meeting`**. Bot typically uses the worker in-process via `createTranscriptWorker`.
 
 ### Transcript pretty-print & summarization
 
@@ -37,11 +37,11 @@ A Discord bot that implements STT and summarization capabilities.
 
 ---
 
-## Intended flow
+## Flow
 
-After participants accept the disclaimer, the bot captures audio from the voice channel and hands it to the session manager, which chunks per participant and enqueues chunks to the Worker. The Worker calls the STT service for transcription and writes a JSONL transcript per meeting. On `/close`, the session manager stops capture, closes the Worker meeting to get the transcript path, pretty‑prints the transcript into a Markdown report, and calls an LLM to summarize it; the bot then posts the summary in Discord.  
-**Done:** Session and disclaimer; STT wrapper `/transcribe` API; transcript Worker (queue, STT client, JSONL file, standalone server); bot voice capture, per‑participant decode & chunk, and sending chunks to the Worker; end‑of‑meeting pretty‑print and summarization on `/close`.  
-**Next:** Integration tests and stronger error-handling around Worker/STT/LLM failures.
+After participants accept a disclaimer, the coordinator joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord.
+
+**Current:** Full happy path works. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test (`tests/integration/meeting-flow.test.js`) covering happy path and failure cases (worker down, STT retries). V1 failure behavior documented in `docs/TESTING.md`.
 
 ---
 
@@ -131,6 +131,8 @@ Copy `.env-example` to `.env` and set:
 
 You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node deploy-commands.js"`.
 
+**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM).
+
 **STT wrapper**
 
 - Run the API (from repo root, with venv activated):
@@ -152,15 +154,10 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 
 **Transcript worker**
 
-- Run the worker HTTP server (from repo root, with STT wrapper running):
+- Run the worker HTTP server (from repo root, with STT wrapper running; optional if bot uses worker in-process):
   ```bash
-  node services/worker/index.js
+  node services/transcript-worker/index.js
   ```
-- Run a smoke test that feeds WAV files from disk into the worker (in-process): start meeting, enqueue each file as a chunk, close meeting, then print transcript path and a short preview. Default directory: `tests/audio-samples`. Optional argument: path to a folder of `.wav` files (e.g. `tests/audio-files`).
-  ```bash
-  node scripts/transcript-worker/test-from-disk.js [audio-dir]
-  ```
-
 ---
 
 ## Commands
@@ -181,7 +178,7 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `commands/utility/` | Slash commands: `start.js`, `close.js` |
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
-| `handleDisclaimerButtons.js` | Handles disclaimer Accept/Reject buttons |
+| `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `stt-wrapper/repl.py` | Simple REPL-style script: run transcription on WAV files |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
@@ -191,8 +188,8 @@ You may add to `package.json`: `"start": "node index.js"`, `"deploy": "node depl
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
 | `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
-| `services/session-manager/session-manager.js` | Manages Discord voice connections and per-meeting state: captures participant audio, enqueues chunks to the Worker, closes meetings, generates reports, and runs LLM summarization |
-| `scripts/transcript-worker/test-from-disk.js` | Smoke test: feed WAV files from disk through the Worker (start → enqueue → close → preview transcript) |
+| `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
+| `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/env.sh` | Unix: activate venv + set `LD_LIBRARY_PATH` for CUDA libs |
 | `scripts/env.bat` | Windows: activate venv + set `PATH` for CUDA libs |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |

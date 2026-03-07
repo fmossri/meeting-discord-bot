@@ -23,7 +23,6 @@ class TranscribeRequest(BaseModel):
     meetingId: str
     chunkId: int
     chunkStartTimeMs: int
-    chunkEndTimeMs: int
     audio: str
 
 class TranscribeResponse(BaseModel):

@@ -18,7 +18,6 @@ request_data = {
     "chunkId": 1,
     "participantId": "1234567890",
     "chunkStartTimeMs": 0,
-    "chunkEndTimeMs": 24000,
     "audio": audio_base64
 }
 
