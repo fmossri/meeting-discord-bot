@@ -1,58 +1,60 @@
-const { MessageFlags, ActionRowBuilder } = require('discord.js');
-const { execute } = require('../../../commands/utility/start.js');
-const { sessionStore } = require('../../../session.js');
+const { MessageFlags } = require('discord.js');
+const startCommand = require('../../../commands/utility/start.js');
 
-describe('start', () => {
-    const interaction = {
-        member: {
-            voice: {
-                channel: {
-                    id: '123',
-                    members: [{ user: { id: '123' } }, { user: { id: '456' } }, { user: { id: '789' } }],
-                },
-            },
-        },
-        reply: jest.fn().mockResolvedValue({ fetch: jest.fn().mockResolvedValue({ id: '123' }) }),
-        deferUpdate: jest.fn().mockResolvedValue(undefined),
-        followUp: jest.fn().mockResolvedValue(undefined),
-        
-    }
-    beforeEach(() => {
-        jest.useFakeTimers();
-        sessionStore.clearSessions();
-    });
+function createMockInteraction(overrides = {}) {
+	const reply = jest.fn().mockResolvedValue(undefined);
+	const sessionStore = {
+		channelHasSession: jest.fn().mockReturnValue(false),
+	};
+	const botCoordinator = {
+		startMeeting: jest.fn().mockResolvedValue(undefined),
+	};
+	const interaction = {
+		member: { voice: { channel: { id: 'voice-123' } } },
+		client: { sessionStore, botCoordinator },
+		reply,
+		...overrides,
+	};
+	return { interaction, reply, sessionStore, botCoordinator };
+}
 
-    it('returns an error if the user is not connected to a voice channel', async () => {
-        
-        interaction.member.voice.channel = null;
-        await execute(interaction);
-        expect(interaction.reply).toHaveBeenCalledWith({
-            content: 'Must be connected to a voice channel',
-            flags: MessageFlags.Ephemeral,
-        });
-    });
-    it('returns an error if a session already exists in the voice channel', async () => {
-        interaction.member.voice.channel = { id: '123' };
-        sessionStore.createSession('123', {
-            participantIds: ['123', '456', '789'],
-            voiceChannelId: '123',
-            acceptedIds: [],
-            disclaimerAccepted: false,
-            originalInteraction: interaction,
-            timeoutId: null,
-        });
-        await execute(interaction);
-        expect(interaction.reply).toHaveBeenCalledWith({
-            content: 'A session is already in progress in this channel',
-            flags: MessageFlags.Ephemeral,
-        });
-    });
-    it('creates a session and returns a message with the participants', async () => {
-        interaction.member.voice.channel.members = [{ user: { id: '123' } }, { user: { id: '456' } }, { user: { id: '789' } }];
-        await execute(interaction);
-        expect(interaction.reply).toHaveBeenCalledWith({
-            content: expect.stringContaining('Starting procedures for a meeting recording and summarization.'),
-            components: expect.arrayContaining([expect.any(ActionRowBuilder)]),
-        });
-    })
+describe('/start', () => {
+	it('replies with "Must be connected to a voice channel"', async () => {
+		const { interaction, reply, botCoordinator } = createMockInteraction({
+			member: { voice: { channel: null } },
+		});
+
+		await startCommand.execute(interaction);
+
+		expect(reply).toHaveBeenCalledTimes(1);
+		expect(reply).toHaveBeenCalledWith({
+			content: 'Must be connected to a voice channel',
+			flags: MessageFlags.Ephemeral,
+		});
+		expect(botCoordinator.startMeeting).not.toHaveBeenCalled();
+	});
+
+	it('replies with "A session is already in progress" and does not call coordinator when channel has a session', async () => {
+		const { interaction, reply, sessionStore, botCoordinator } = createMockInteraction();
+		sessionStore.channelHasSession.mockReturnValue(true);
+
+		await startCommand.execute(interaction);
+
+		expect(reply).toHaveBeenCalledTimes(1);
+		expect(reply).toHaveBeenCalledWith({
+			content: 'A session is already in progress in this channel',
+			flags: MessageFlags.Ephemeral,
+		});
+		expect(botCoordinator.startMeeting).not.toHaveBeenCalled();
+	});
+
+	it('calls botCoordinator.startMeeting with interaction when in voice channel and no session', async () => {
+		const { interaction, reply, botCoordinator } = createMockInteraction();
+
+		await startCommand.execute(interaction);
+
+		expect(botCoordinator.startMeeting).toHaveBeenCalledTimes(1);
+		expect(botCoordinator.startMeeting).toHaveBeenCalledWith(interaction);
+		expect(reply).not.toHaveBeenCalled();
+	});
 });
