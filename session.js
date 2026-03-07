@@ -2,14 +2,14 @@ const sessions = new Map();
 
 const sessionStore = {
 
-	createSession(sessionId, sessionData) {
-		sessions.set(sessionId, sessionData);
+	createSession(sessionId, sessionState) {
+		sessions.set(sessionId, sessionState);
 		console.log('debug message: session created!');
 	},
 	findSessionByChannelId(channelId) {
-		for (const [sessionId, sessionData] of sessions.entries()) {
-			if (sessionData.voiceChannelId === channelId) {
-				return { sessionId, sessionData };
+		for (const [sessionId, sessionState] of sessions.entries()) {
+			if (sessionState.voiceChannelId === channelId) {
+				return { sessionId, sessionState };
 			}
 		}
 		return null;

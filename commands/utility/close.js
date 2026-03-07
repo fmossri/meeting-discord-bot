@@ -1,36 +1,38 @@
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
-const { sessionStore } = require('../../session.js');
 
 module.exports = {
 	data: new SlashCommandBuilder().setName('close').setDescription('Closes the session and deletes the session data'),
 	async execute(interaction) {
-		const member = interaction.member;
-		if (!member.voice.channel) {
+	    const member = interaction.member;
+        const voiceChannel = member?.voice?.channel;
+        const sessionStore = interaction.client.sessionStore;
+        if (!voiceChannel) {
+            await interaction.reply({
+                content: 'Must be in the meeting\'s voice channel.',
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
+        if (!sessionStore.channelHasSession(voiceChannel.id)) {
+            await interaction.reply({
+                content: 'Meeting not found.',
+                flags: MessageFlags.Ephemeral,
+            });
+            return;
+        }
+        const { sessionId, sessionState } = sessionStore.getSessionByChannelId(voiceChannel.id);
+
+
+
+		if (!sessionState.participantIds.includes(member.user.id)) {
 			await interaction.reply({
-				content: 'Must be connected to a voice channel',
+				content: 'You are not a participant in this meeting.',
 				flags: MessageFlags.Ephemeral,
 			});
 			return;
 		}
 
-		const voiceChannel = member.voice.channel;
-		if (!sessionStore.channelHasSession(voiceChannel.id)) {
-			await interaction.reply({
-				content: 'No session found in this channel.',
-				flags: MessageFlags.Ephemeral,
-			});
-			return;
-		}
-
-		const session = sessionStore.getSessionByChannelId(voiceChannel.id);
-		if (!session.sessionData.participantIds.includes(member.user.id)) {
-			await interaction.reply({
-				content: 'You are not a participant in this session.',
-				flags: MessageFlags.Ephemeral,
-			});
-			return;
-		}
-		if (!session.sessionData.disclaimerAccepted) {
+		if (!sessionState.participantIds.length) {
 			await interaction.reply({
 				content: 'The meeting has not started yet.',
 				flags: MessageFlags.Ephemeral,
@@ -38,15 +40,11 @@ module.exports = {
 			return;
 		}
         try {
-            const { summary } = await interaction.client.sessionManager.finishMeeting(session.sessionId);
-            await interaction.reply({
-                content: `The meeting is over. Thank you for participating.\n\n**Summary:**\n${summary}`,
-            });
-            console.log('meeting finished.');
+            await interaction.client.botCoordinator.closeMeeting(sessionId, interaction);
         } catch (error) {
-            console.error('error finishing meeting.', error);
+            console.error(error.message);
             await interaction.reply({
-                content: 'An error occurred while finishing the meeting.',
+                content: 'An error occurred while closing the meeting.',
                 flags: MessageFlags.Ephemeral,
             });
         }

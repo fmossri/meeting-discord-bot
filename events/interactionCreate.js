@@ -1,5 +1,4 @@
 const { Events, MessageFlags } = require('discord.js');
-const { handleDisclaimerButtons } = require('../handleDisclaimerButtons.js');
 
 async function interactionErrorHelper(interaction, errorMessage) {
 	if (interaction.replied || interaction.deferred) {
@@ -37,11 +36,11 @@ module.exports = {
 		}
 		else if (interaction.isButton()) {
 			try {
-				await handleDisclaimerButtons(interaction);
+				await interaction.client.botCoordinator.handleButtonInteraction(interaction);
 			}
 			catch (error) {
 				console.error(error);
-				await interactionErrorHelper(interaction, 'There was an error while handling the disclaimer buttons!');
+				await interactionErrorHelper(interaction, 'There was an error while handling this button.');
 			}
 		}
 		else {return;}
