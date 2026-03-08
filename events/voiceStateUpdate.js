@@ -6,23 +6,32 @@ const LATE_JOINER_DM =
 module.exports = {
 	name: Events.VoiceStateUpdate,
 	async execute(oldState, newState, client) {
-		if (!newState.channelId) {
+		// Ignore leaves (handled elsewhere) and non-channel changes like mute/unmute
+		if (!newState.channelId || oldState.channelId === newState.channelId) {
 			return;
 		}
+
 		const sessionJoined = client.sessionStore.getSessionByChannelId(newState.channelId);
 		if (!sessionJoined) return;
-		const userId = newState.id;
 
-		if (!sessionJoined.sessionState.participantIds.includes(userId)) {
+		const userId = newState.id;
+		const { participantIds, dmIds, started } = sessionJoined.sessionState;
+
+		// First time we see this user in the meeting channel: send late-joiner DM once
+		if (!participantIds.includes(userId) && !dmIds.includes(userId) && started) {
 			const user = newState.member?.user ?? (await client.users.fetch(userId).catch(() => null));
 			if (user) {
 				await user.send(LATE_JOINER_DM).catch((err) => {
 					console.error('Could not DM late joiner:', err.message);
 				});
+				dmIds.push(userId);
 			}
 			return;
 		}
 
-		client.botCoordinator.reconnectParticipant(sessionJoined.sessionId, userId);
+		// User already known to the session: if they are a participant, reconnect them
+		if (participantIds.includes(userId)) {
+			client.botCoordinator.reconnectParticipant(sessionJoined.sessionId, userId);
+		}
 	},
 };

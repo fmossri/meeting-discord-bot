@@ -62,7 +62,7 @@ describe('VoiceStateUpdate', () => {
 		const send = jest.fn().mockResolvedValue(undefined);
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['other-user'] },
+			sessionState: { participantIds: ['other-user'], dmIds: [] },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -84,7 +84,7 @@ describe('VoiceStateUpdate', () => {
 	it('does not throw when late joiner has no member and users.fetch fails', async () => {
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['other-user'] },
+			sessionState: { participantIds: ['other-user'], dmIds: [] },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -101,7 +101,7 @@ describe('VoiceStateUpdate', () => {
 	it('calls reconnectParticipant when user is in participantIds', async () => {
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['user-456'] },
+			sessionState: { participantIds: ['user-456'], dmIds: [] },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -114,5 +114,24 @@ describe('VoiceStateUpdate', () => {
 
 		expect(reconnectParticipant).toHaveBeenCalledTimes(1);
 		expect(reconnectParticipant).toHaveBeenCalledWith('session-1', 'user-456');
+	});
+
+	it('does nothing when user stays in the same channel (mute/unmute etc.)', async () => {
+		const getSessionByChannelId = jest.fn().mockReturnValue({
+			sessionId: 'session-1',
+			sessionState: { participantIds: [], dmIds: [] },
+		});
+		const reconnectParticipant = jest.fn();
+		const client = createMockClient({
+			sessionStore: { getSessionByChannelId },
+			botCoordinator: { reconnectParticipant },
+		});
+		const oldState = createMockNewState({ channelId: 'channel-123' });
+		const newState = createMockNewState({ channelId: 'channel-123' });
+
+		await voiceStateUpdate.execute(oldState, newState, client);
+
+		expect(getSessionByChannelId).not.toHaveBeenCalled();
+		expect(reconnectParticipant).not.toHaveBeenCalled();
 	});
 });
