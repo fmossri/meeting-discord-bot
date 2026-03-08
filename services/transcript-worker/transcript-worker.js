@@ -217,8 +217,20 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 		const meeting = meetingsMap.get(meetingId);
 		try {
-			if (meeting.transcriptState.processingPromise) {
-				await meeting.transcriptState.processingPromise;
+			// Drain queue: process all remaining chunks and flush to tmp before building final transcript
+			while (meeting.chunksQueue.length > 0 || meeting.transcriptState.processingPromise) {
+				if (meeting.transcriptState.processingPromise) {
+					await meeting.transcriptState.processingPromise;
+				} else {
+					ensureProcessing(meetingId);
+					if (meeting.transcriptState.processingPromise) {
+						await meeting.transcriptState.processingPromise;
+					}
+				}
+			}
+			// Flush any remaining processed chunks to tmp
+			if (meeting.processedChunks.length > 0) {
+				await appendToTemp(meetingId);
 			}
 			if (meeting.failedChunks.length > 0) {
 				for (const chunk of meeting.failedChunks) {
@@ -228,7 +240,12 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				}
 				meeting.failedChunks = [];
 				await ensureProcessing(meetingId);
-
+				if (meeting.transcriptState.processingPromise) {
+					await meeting.transcriptState.processingPromise;
+				}
+				if (meeting.processedChunks.length > 0) {
+					await appendToTemp(meetingId);
+				}
 				if (meeting.failedChunks.length > 0) {
 					const failedChunkStartTimes = meeting.failedChunks.map((chunk, i) => `chunk ${i}: ${chunk.chunkStartTimeMs}ms`).join(', ');
 					console.error(`${meeting.failedChunks.length} chunks failed to transcribe: ${failedChunkStartTimes}`);
