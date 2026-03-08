@@ -1,6 +1,17 @@
+"""
+Standalone model benchmark: load faster-whisper and measure latency (no HTTP).
+Run with:  python scripts/stt-wrapper/model_benchmark.py   (from repo root; use python, not bash).
+"""
 import os
-import time
+import sys
 
+_stt_wrapper_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "stt-wrapper")
+_stt_wrapper_dir = os.path.normpath(_stt_wrapper_dir)
+if _stt_wrapper_dir not in sys.path:
+    sys.path.insert(0, _stt_wrapper_dir)
+import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
+
+import time
 from pathlib import Path
 from faster_whisper import WhisperModel
 from dotenv import load_dotenv
