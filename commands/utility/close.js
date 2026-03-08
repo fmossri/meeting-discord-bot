@@ -1,4 +1,5 @@
 const { SlashCommandBuilder, MessageFlags } = require('discord.js');
+const { interactionErrorHelper } = require('../../utils/interaction-errors.js');
 
 module.exports = {
 	data: new SlashCommandBuilder().setName('close').setDescription('Closes the session and deletes the session data'),
@@ -43,10 +44,7 @@ module.exports = {
             await interaction.client.botCoordinator.closeMeeting(sessionId, interaction);
         } catch (error) {
             console.error(error.message);
-            await interaction.reply({
-                content: 'An error occurred while closing the meeting.',
-                flags: MessageFlags.Ephemeral,
-            });
+			await interactionErrorHelper(interaction, 'An error occurred while closing the meeting.');
         }
     },
 };
