@@ -2,6 +2,7 @@ const prism = require('prism-media');
 const { ButtonBuilder, ButtonStyle, ActionRowBuilder, MessageFlags } = require('discord.js');
 const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const { interactionErrorHelper } = require('../utils/interaction-errors.js');
+const timeoutDuration = require('../config/timeouts.js');
 
 function createBotCoordinator(sessionStore) {
     const confirmMsgToSession = new Map();
@@ -98,6 +99,10 @@ function createBotCoordinator(sessionStore) {
                     duration: 100
                 }
             };
+            if (!sessionState.voiceConnection) {
+                console.error('voice connection not found.');
+                return false;
+            }
             const receiver = sessionState.voiceConnection.receiver;
             const decoder = new prism.opus.Decoder(
                 {
@@ -134,15 +139,27 @@ function createBotCoordinator(sessionStore) {
             return;
         }
         if (!sessionState.voiceConnection) {
-            if (!(await connectToChannel(sessionId))) {
-                throw new Error('error connecting to channel.');
+            try {
+                if (!(await connectToChannel(sessionId))) {
+                    console.error('error connecting to channel.');
+                    return false;
+                }
+            } catch (error) {
+                console.error('error connecting to channel.', error);
+                throw error;
             }
         }
-        if (sessionState.timeoutId) {
-            clearTimeout(sessionState.timeoutId);
-            sessionState.timeoutId = null;
+        if (sessionState.timeouts.uiTimeoutId) {
+            clearTimeout(sessionState.timeouts.uiTimeoutId);
+            sessionState.timeouts.uiTimeoutId = null;
         }
-
+        if (sessionState.paused) {
+            clearTimeout(sessionState.timeouts.pauseTimeoutId);
+            sessionState.timeouts.pauseTimeoutId = null;
+            sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
+                await executeClose(sessionId, true);
+            }, timeoutDuration.explicitPauseMs);
+        }
         if (!sessionState.started) {
             const started = await interaction.client.sessionManager.startSession(sessionId);
             if (!started) return false;
@@ -187,6 +204,14 @@ function createBotCoordinator(sessionStore) {
             console.error('participant not found.', participantId);
             return false;
         }
+        if (sessionState.paused) {
+            clearTimeout(sessionState.timeouts.pauseTimeoutId);
+            sessionState.timeouts.pauseTimeoutId = null;
+            sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
+                await executeClose(sessionId, true);
+            }, timeoutDuration.explicitPauseMs);
+            return;
+        }
         try {
             if (participant.subscription) {
                 unsubscribeFromStream(sessionId, participantId);
@@ -219,6 +244,56 @@ function createBotCoordinator(sessionStore) {
         }
         catch (error) {
             console.error('error stopping voice capture.', error);
+            return false;
+        }
+    }
+    async function executeClose(sessionId, autoClose = false) {
+        const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            console.error('session not found.', sessionId);
+            return false;
+        }
+        const client = sessionState.originalInteraction.client;
+        if (sessionState.timeouts.uiTimeoutId) {
+            clearTimeout(sessionState.timeouts.uiTimeoutId);
+            sessionState.timeouts.uiTimeoutId = null;
+        }
+        if (sessionState.timeouts.pauseTimeoutId) {
+            clearTimeout(sessionState.timeouts.pauseTimeoutId);
+            sessionState.timeouts.pauseTimeoutId = null;
+        }
+        if (!stopVoiceCapture(sessionId)) {
+            console.error('error stopping voice capture.');
+            return false;
+        }
+        try {
+            const { _, summary } = await client.sessionManager.closeSession(sessionId);
+            const closeMessage = autoClose ? 
+            'Meeting closed due to inactivity. The partial report is saved.' : 
+            `The meeting is over. Thank you for participating. \n\n**Summary:**\n${summary}`;
+            await sessionState.originalInteraction.followUp({
+                content: closeMessage,
+            });
+
+            const disabledAccept = new ButtonBuilder()
+                .setCustomId('disclaimer-accept')
+                .setLabel('Accept')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(true);
+            const disabledReject = new ButtonBuilder()
+                .setCustomId('disclaimer-reject')
+                .setLabel('Reject')
+                .setStyle(ButtonStyle.Danger)
+                .setDisabled(true);
+            const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
+            await sessionState.originalInteraction.editReply({ components: [disabledRow] });
+
+            sessionStore.deleteSession(sessionId);
+            return true;
+        } catch (error) {
+            console.error('error closing session.', error);
+            sessionStore.deleteSession(sessionId);
+            console.error('session deleted due to error.');
             return false;
         }
     }
@@ -270,33 +345,17 @@ function createBotCoordinator(sessionStore) {
                     else {await interaction.deferUpdate(); break;}
             
                 case 'close-meeting-confirm':
-                    if (sessionState.timeoutId) {
-                        clearTimeout(sessionState.timeoutId);
-                        sessionState.timeoutId = null;
+                    if (sessionState.timeouts.uiTimeoutId) {
+                        clearTimeout(sessionState.timeouts.uiTimeoutId);
+                        sessionState.timeouts.uiTimeoutId = null;
                     }
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-                    stopVoiceCapture(sessionId);
-
-                    const { reportPath, summary } = await interaction.client.sessionManager.closeSession(sessionId);
-                    await sessionState.originalInteraction.followUp({
-                        content: `The meeting is over. Thank you for participating.\n\n**Summary:**\n${summary}`,
-                    });
-
-                    const disabledAccept = new ButtonBuilder()
-                        .setCustomId('disclaimer-accept')
-                        .setLabel('Accept')
-                        .setStyle(ButtonStyle.Success)
-                        .setDisabled(true);
-                    const disabledReject = new ButtonBuilder()
-                        .setCustomId('disclaimer-reject')
-                        .setLabel('Reject')
-                        .setStyle(ButtonStyle.Danger)
-                        .setDisabled(true);
-                    const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
-                    await sessionState.originalInteraction.editReply({ components: [disabledRow] });
-
-                    sessionStore.deleteSession(sessionId);
+                    if (!(await executeClose(sessionId))) {
+                        console.error('error executing close.');
+                        await interactionErrorHelper(interaction, 'An error occurred while closing the meeting.');
+                        break;
+                    }
                     confirmMsgToSession.delete(interaction.message.id);
                     await interaction.deleteReply();
                     console.log('session deleted.');
@@ -329,12 +388,13 @@ function createBotCoordinator(sessionStore) {
             participantStates: new Map(),
 			voiceChannelId: voiceChannel.id,
 			originalInteraction: interaction,
-			timeoutId: null,
+			timeouts:{uiTimeoutId: null, pauseTimeoutId: null},
 		};
-		const sessionTimeoutId = setTimeout(async () => {
+		const uiTimeoutId = setTimeout(async () => {
 			const session = sessionStore.getSessionById(sessionId);
 			if (session) {
                 try {
+                    session.timeouts.uiTimeoutId = null;
                     await session.originalInteraction.followUp({
                         content: 'Session timed out after 1 minute. All participants must accept to start the meeting.',
                     });
@@ -345,34 +405,48 @@ function createBotCoordinator(sessionStore) {
 			}
 			sessionStore.deleteSession(sessionId);
 			console.log('session timed out and deleted.');
-		}, 1000 * 60);
-		sessionState.timeoutId = sessionTimeoutId;
+		}, timeoutDuration.uiTimeoutMs);
+		sessionState.timeouts.uiTimeoutId = uiTimeoutId;
 		sessionStore.createSession(sessionId, sessionState);
         return true;
     }
 
     async function pauseMeeting(sessionId) {
         const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            console.error('session not found.', sessionId);
+            return false;
+        }
         try {
             stopVoiceCapture(sessionId);
             sessionState.paused = true;
-            await sessionState.originalInteraction.followUp({
-                content: 'Meeting recording paused.',
-            });
+            const pauseTimeoutId = setTimeout(async () => {
+                console.log('pause timeout expired.');
+                await executeClose(sessionId, true);
+            }, timeoutDuration.explicitPauseMs);
+            sessionState.timeouts.pauseTimeoutId = pauseTimeoutId;
         } catch (error) {
             console.error('error pausing meeting.', error);
-            throw new Error('error pausing meeting.');
+            throw error;
         }
     }
 
     async function resumeMeeting(sessionId) {
         const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            console.error('session not found.', sessionId);
+            return false;
+        }
         try {
             if (!sessionState.voiceConnection) {
                 if (!(await connectToChannel(sessionId))) {
                     console.error('error connecting to channel.');
                     return false;
                 }
+            }
+            if (sessionState.timeouts.pauseTimeoutId) {
+                clearTimeout(sessionState.timeouts.pauseTimeoutId);
+                sessionState.timeouts.pauseTimeoutId = null;
             }
             const voiceChannel = await sessionState.originalInteraction.guild.channels.fetch(sessionState.voiceChannelId);
             if (!voiceChannel) {
@@ -392,12 +466,16 @@ function createBotCoordinator(sessionStore) {
         }
         catch (error) {
             console.error('error resuming meeting.', error);
-            throw new Error(error);
+            throw error;
         }
     }
 
     async function closeMeeting(sessionId, interaction) {
         const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            console.error('session not found.', sessionId);
+            return false;
+        }
         const confirmButton = new ButtonBuilder()
             .setCustomId('close-meeting-confirm')
             .setLabel('Confirm')
@@ -410,7 +488,7 @@ function createBotCoordinator(sessionStore) {
         });
 
         confirmMsgToSession.set(confirmMessage.id, sessionId);
-        const timeoutId = setTimeout(async () => {
+        const uiTimeoutId = setTimeout(async () => {
             try {
                 await confirmMessage.delete();
             } catch (err) {
@@ -418,11 +496,29 @@ function createBotCoordinator(sessionStore) {
             }
             confirmMsgToSession.delete(confirmMessage.id);
             console.log('End meeting confirm message timed out and deleted.');
-        }, 1000 * 60);
-        sessionState.timeoutId = timeoutId;
+        }, timeoutDuration.uiTimeoutMs);
+        sessionState.timeouts.uiTimeoutId = uiTimeoutId;
 
         console.log('End meeting confirm message sent.');
         return true;
+    }
+
+    async function autoCloseMeeting(sessionId) {
+        const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState) {
+            console.error('session not found.', sessionId);
+            return false;
+        }
+        try {
+            if (!(await executeClose(sessionId, true))) {
+                console.error('error executing close.');
+                return false;
+            }
+            return true;
+        } catch (error) {
+            console.error('error auto closing meeting.', error);
+            return false;
+        }
     }
 
     return {
@@ -432,7 +528,7 @@ function createBotCoordinator(sessionStore) {
         resumeMeeting,
         reconnectParticipant,
         handleButtonInteraction,
-
+        autoCloseMeeting,
     };
 }
 module.exports = { createBotCoordinator };

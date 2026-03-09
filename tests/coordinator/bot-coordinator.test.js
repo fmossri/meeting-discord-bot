@@ -110,23 +110,25 @@ describe('Bot Coordinator', () => {
 			});
 			expect(sessionState.participantStates).toBeInstanceOf(Map);
 			expect(sessionState.originalInteraction).toBe(interaction);
-			expect(sessionState.timeoutId).not.toBeNull();
+			expect(sessionState.timeouts.uiTimeoutId).not.toBeNull();
 		});
 	});
 
 	describe('closeMeeting', () => {
-		it('throws when session does not exist (sessionState is null)', async () => {
+		it('returns false when session does not exist (sessionState is null)', async () => {
 			const sessionStore = createMockSessionStore(null);
 			const coordinator = createBotCoordinator(sessionStore);
 			const interaction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: 'confirm-msg-id', delete: jest.fn().mockResolvedValue(undefined) }),
 			});
 
-			await expect(coordinator.closeMeeting('session-1', interaction)).rejects.toThrow();
+			const result = await coordinator.closeMeeting('session-1', interaction);
+
+			expect(result).toBe(false);
 		});
 
 		it('calls editReply with confirm message and stores confirm mapping when session exists', async () => {
-			const sessionState = { timeoutId: null };
+			const sessionState = { timeouts: { uiTimeoutId: null, pauseTimeoutId: null } };
 			const sessionStore = createMockSessionStore(sessionState);
 			const coordinator = createBotCoordinator(sessionStore);
 			const interaction = createMockInteraction({
@@ -141,7 +143,7 @@ describe('Bot Coordinator', () => {
 					flags: MessageFlags.Ephemeral,
 				})
 			);
-			expect(sessionState.timeoutId).not.toBeNull();
+			expect(sessionState.timeouts.uiTimeoutId).not.toBeNull();
 		});
 	});
 
@@ -199,13 +201,18 @@ describe('Bot Coordinator', () => {
 	});
 
 	describe('pauseMeeting', () => {
-		it('sets sessionState.paused and followUp "Meeting recording paused." when session exists', async () => {
-			const followUpMock = jest.fn().mockResolvedValue(undefined);
+		it('sets sessionState.paused and pauseTimeoutId when session exists', async () => {
+			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
 			const sessionState = {
 				participantIds: ['user-1'],
 				voiceConnection: { destroy: jest.fn(), receiver: { subscribe: mockReceiverSubscribe } },
 				participantStates: new Map([['user-1', { subscription: null, pcmStream: null }]]),
-				originalInteraction: { followUp: followUpMock },
+				originalInteraction: {
+					followUp: jest.fn().mockResolvedValue(undefined),
+					editReply: jest.fn().mockResolvedValue(undefined),
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			const coordinator = createBotCoordinator(sessionStore);
@@ -213,24 +220,9 @@ describe('Bot Coordinator', () => {
 			await coordinator.pauseMeeting('session-1');
 
 			expect(sessionState.paused).toBe(true);
-			expect(followUpMock).toHaveBeenCalledTimes(1);
-			expect(followUpMock).toHaveBeenCalledWith({
-				content: 'Meeting recording paused.',
-			});
+			expect(sessionState.timeouts.pauseTimeoutId).not.toBeNull();
 		});
 
-		it('throws when followUp rejects', async () => {
-			const sessionState = {
-				participantIds: [],
-				voiceConnection: { destroy: jest.fn() },
-				participantStates: new Map(),
-				originalInteraction: { followUp: jest.fn().mockRejectedValue(new Error('followUp failed')) },
-			};
-			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(sessionStore);
-
-			await expect(coordinator.pauseMeeting('session-1')).rejects.toThrow('error pausing meeting');
-		});
 	});
 
 	describe('resumeMeeting', () => {
@@ -248,6 +240,7 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map([
 					['user-1', { subscription: null, pcmStream: null, displayName: 'User1', chunkerState: {} }],
 				]),
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(voiceChannel) } },
 					client: { sessionManager: { chunkStream: jest.fn() } },
@@ -274,6 +267,7 @@ describe('Bot Coordinator', () => {
 				voiceChannelId: 'voice-123',
 				voiceConnection: null,
 				participantStates: new Map(),
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue({ members: [] }) } },
 					followUp: jest.fn().mockResolvedValue(undefined),
@@ -293,6 +287,7 @@ describe('Bot Coordinator', () => {
 				voiceChannelId: 'voice-123',
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
 				participantStates: new Map(),
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(null) } },
 					followUp: jest.fn().mockResolvedValue(undefined),
@@ -313,6 +308,7 @@ describe('Bot Coordinator', () => {
 				voiceChannelId: 'voice-123',
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
 				participantStates: new Map(),
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: {
 					guild: { channels: { fetch: jest.fn().mockResolvedValue(voiceChannel) } },
 					client: { sessionManager: { chunkStream: jest.fn() } },
@@ -344,7 +340,7 @@ describe('Bot Coordinator', () => {
 				rejectedIds: [],
 				participantStates: new Map(),
 				voiceConnection: { receiver: { subscribe: mockReceiverSubscribe } },
-				timeoutId: null,
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				originalInteraction: null,
 			};
 			sessionState.originalInteraction = {
@@ -440,12 +436,17 @@ describe('Bot Coordinator', () => {
 			const confirmMessageId = 'confirm-msg-123';
 			const followUpMock = jest.fn().mockResolvedValue(undefined);
 			const editReplyMock = jest.fn().mockResolvedValue(undefined);
+			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/path/report.md', summary: 'Meeting summary.' });
 			const sessionState = {
 				participantIds: [],
-				timeoutId: null,
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
-				originalInteraction: { followUp: followUpMock, editReply: editReplyMock },
+				originalInteraction: {
+					followUp: followUpMock,
+					editReply: editReplyMock,
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
 			};
 			const sessionStore = createMockSessionStore();
 			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
@@ -460,15 +461,11 @@ describe('Bot Coordinator', () => {
 				message: { id: confirmMessageId },
 				customId: 'close-meeting-confirm',
 			});
-			interaction.client.sessionManager.closeSession.mockResolvedValue({
-				reportPath: '/path/report.md',
-				summary: 'Meeting summary.',
-			});
 
 			await coordinator.handleButtonInteraction(interaction);
 
 			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-			expect(interaction.client.sessionManager.closeSession).toHaveBeenCalledWith(sessionId);
+			expect(closeSessionMock).toHaveBeenCalledWith(sessionId);
 			expect(followUpMock).toHaveBeenCalledWith({
 				content: expect.stringContaining('Meeting summary.'),
 			});
@@ -476,17 +473,24 @@ describe('Bot Coordinator', () => {
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith(sessionId);
 		});
 
-		it('followUp with error when close-meeting-confirm and closeSession throws', async () => {
+		it('calls interactionErrorHelper when close-meeting-confirm and closeSession throws', async () => {
 			const sessionId = 'session-1';
 			const confirmMessageId = 'confirm-msg-456';
+			const followUpMock = jest.fn().mockResolvedValue(undefined);
+			const closeSessionMock = jest.fn().mockRejectedValue(new Error('close failed'));
 			const sessionState = {
 				participantIds: [],
-				timeoutId: null,
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 				voiceConnection: { destroy: jest.fn() },
 				participantStates: new Map(),
-				originalInteraction: { followUp: jest.fn().mockResolvedValue(undefined), editReply: jest.fn().mockResolvedValue(undefined) },
+				originalInteraction: {
+					followUp: followUpMock,
+					editReply: jest.fn().mockResolvedValue(undefined),
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
+			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
 			const coordinator = createBotCoordinator(sessionStore);
 			const closeInteraction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: confirmMessageId, delete: jest.fn().mockResolvedValue(undefined) }),
@@ -497,15 +501,17 @@ describe('Bot Coordinator', () => {
 				message: { id: confirmMessageId },
 				customId: 'close-meeting-confirm',
 				deferred: true,
+				replied: true,
 			});
-			interaction.client.sessionManager.closeSession.mockRejectedValue(new Error('close failed'));
+			interaction.followUp = jest.fn().mockResolvedValue(undefined);
 
 			await coordinator.handleButtonInteraction(interaction);
 
 			expect(interaction.followUp).toHaveBeenCalledWith({
-				content: 'An error occurred while handling the button interaction.',
+				content: 'An error occurred while closing the meeting.',
 				flags: MessageFlags.Ephemeral,
 			});
+			expect(sessionStore.deleteSession).toHaveBeenCalledWith(sessionId);
 		});
 
 		it('calls deferUpdate for unknown customId', async () => {
@@ -525,6 +531,113 @@ describe('Bot Coordinator', () => {
 
 			expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
 			expect(interaction.reply).not.toHaveBeenCalled();
+		});
+	});
+
+	describe('autoCloseMeeting', () => {
+		it('returns false when session not found', async () => {
+			const sessionStore = createMockSessionStore(null);
+			const coordinator = createBotCoordinator(sessionStore);
+
+			const result = await coordinator.autoCloseMeeting('session-1');
+
+			expect(result).toBe(false);
+			expect(sessionStore.deleteSession).not.toHaveBeenCalled();
+		});
+
+		it('returns true and calls executeClose with autoClose when session exists and close succeeds', async () => {
+			const followUpMock = jest.fn().mockResolvedValue(undefined);
+			const editReplyMock = jest.fn().mockResolvedValue(undefined);
+			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Auto-close summary.' });
+			const sessionState = {
+				participantIds: [],
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
+				voiceConnection: { destroy: jest.fn() },
+				participantStates: new Map(),
+				originalInteraction: {
+					followUp: followUpMock,
+					editReply: editReplyMock,
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
+			};
+			const sessionStore = createMockSessionStore(sessionState);
+			const coordinator = createBotCoordinator(sessionStore);
+
+			const result = await coordinator.autoCloseMeeting('session-1');
+
+			expect(result).toBe(true);
+			expect(closeSessionMock).toHaveBeenCalledWith('session-1');
+			expect(followUpMock).toHaveBeenCalledWith({
+				content: 'Meeting closed due to inactivity. The partial report is saved.',
+			});
+			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
+		});
+
+		it('returns false when executeClose returns false (closeSession throws)', async () => {
+			const closeSessionMock = jest.fn().mockRejectedValue(new Error('close failed'));
+			const sessionState = {
+				participantIds: [],
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
+				voiceConnection: { destroy: jest.fn() },
+				participantStates: new Map(),
+				originalInteraction: {
+					followUp: jest.fn().mockResolvedValue(undefined),
+					editReply: jest.fn().mockResolvedValue(undefined),
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
+			};
+			const sessionStore = createMockSessionStore(sessionState);
+			const coordinator = createBotCoordinator(sessionStore);
+
+			const result = await coordinator.autoCloseMeeting('session-1');
+
+			expect(result).toBe(false);
+			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
+		});
+
+		it('returns false when executeClose throws (e.g. followUp rejects)', async () => {
+			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
+			const followUpMock = jest.fn().mockRejectedValue(new Error('followUp failed'));
+			const sessionState = {
+				participantIds: [],
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
+				voiceConnection: { destroy: jest.fn() },
+				participantStates: new Map(),
+				originalInteraction: {
+					followUp: followUpMock,
+					editReply: jest.fn().mockResolvedValue(undefined),
+					client: { sessionManager: { closeSession: closeSessionMock } },
+				},
+			};
+			const sessionStore = createMockSessionStore(sessionState);
+			const coordinator = createBotCoordinator(sessionStore);
+
+			const result = await coordinator.autoCloseMeeting('session-1');
+
+			expect(result).toBe(false);
+			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
+		});
+
+		it('returns false when executeClose gets session not found (race: session deleted between check and executeClose)', async () => {
+			const sessionState = {
+				participantIds: [],
+				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
+				voiceConnection: { destroy: jest.fn() },
+				participantStates: new Map(),
+				originalInteraction: {
+					followUp: jest.fn().mockResolvedValue(undefined),
+					editReply: jest.fn().mockResolvedValue(undefined),
+					client: { sessionManager: { closeSession: jest.fn() } },
+				},
+			};
+			const sessionStore = createMockSessionStore(sessionState);
+			sessionStore.getSessionById.mockReturnValueOnce(sessionState).mockReturnValueOnce(null);
+			const coordinator = createBotCoordinator(sessionStore);
+
+			const result = await coordinator.autoCloseMeeting('session-1');
+
+			expect(result).toBe(false);
+			expect(sessionStore.deleteSession).not.toHaveBeenCalled();
 		});
 	});
 });

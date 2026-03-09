@@ -62,7 +62,7 @@ describe('VoiceStateUpdate', () => {
 		const send = jest.fn().mockResolvedValue(undefined);
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['other-user'], dmIds: [], started: true },
+			sessionState: { participantIds: ['other-user'], rejectedIds: [], dmIds: [], started: true },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -84,7 +84,7 @@ describe('VoiceStateUpdate', () => {
 	it('does not throw when late joiner has no member and users.fetch fails', async () => {
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['other-user'], dmIds: [] },
+			sessionState: { participantIds: ['other-user'], rejectedIds: [], dmIds: [], started: true },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -101,7 +101,7 @@ describe('VoiceStateUpdate', () => {
 	it('calls reconnectParticipant when user is in participantIds', async () => {
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['user-456'], dmIds: [] },
+			sessionState: { participantIds: ['user-456'], rejectedIds: [], dmIds: [], started: true, paused: false },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({
@@ -119,7 +119,7 @@ describe('VoiceStateUpdate', () => {
 	it('does nothing when user stays in the same channel (mute/unmute etc.)', async () => {
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: [], dmIds: [] },
+			sessionState: { participantIds: [], rejectedIds: [], dmIds: [] },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({

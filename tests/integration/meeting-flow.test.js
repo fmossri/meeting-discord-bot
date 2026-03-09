@@ -215,9 +215,6 @@ describe('meeting flow integration', () => {
 		);
 
 		await coordinator.pauseMeeting(sessionId);
-		expect(startInt.followUp).toHaveBeenCalledWith(
-			expect.objectContaining({ content: 'Meeting recording paused.' })
-		);
 		expect(sessionStore.getSessionById(sessionId).paused).toBe(true);
 
 		await coordinator.resumeMeeting(sessionId);
@@ -293,7 +290,7 @@ describe('meeting flow integration', () => {
 
 		expect(confirmInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
-				content: 'An error occurred while handling the button interaction.',
+				content: 'An error occurred while closing the meeting.',
 			})
 		);
 	});
