@@ -169,8 +169,6 @@ function createSessionManager({
 	return {
 		startSession,
 		closeSession,
-        pauseSession,
-		resumeSession,
 		chunkStream,
 	};
 }

@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Test suite in place (unit + integration).
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -11,6 +11,8 @@ A Discord bot that implements STT and summarization capabilities.
 ### Discord bot (Node.js) — session and interface
 
 - **`/start`** — Start a meeting from a voice channel. The bot posts a disclaimer with Accept/Reject buttons for all participants. One active session per voice channel.
+- **`/pause`** — Pause recording: stop audio capture and sending chunks. Worker drains existing chunks and idles. Transcript state preserved.
+- **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
 - Session state stored in memory (no database). A **coordinator** (`coordinator/bot-coordinator.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
 
@@ -39,9 +41,9 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Flow
 
-After participants accept a disclaimer, the coordinator joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord.
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord.
 
-**Current:** Full happy path works. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test (`tests/integration/meeting-flow.test.js`) covering happy path and failure cases (worker down, STT retries). V1 failure behavior documented in `docs/TESTING.md`.
+**Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
 
 ---
 
@@ -169,7 +171,9 @@ Copy `.env-example` to `.env` and set:
 
 | Command   | Description |
 |-----------|-------------|
-| `/start` | Start a meeting. Must be in a voice channel. | 
+| `/start` | Start a meeting. Must be in a voice channel. |
+| `/pause` | Pause recording. Must be a participant in an active meeting. |
+| `/resume` | Resume recording. Must be a participant in a paused meeting. |
 | `/close` | Close the session and delete session data. Must be in the same voice channel. |
 
 ---
@@ -180,10 +184,10 @@ Copy `.env-example` to `.env` and set:
 |------|-------------|
 | `index.js` | Bot entry point; loads commands, events, starts client (Guilds + GuildVoiceStates intents) |
 | `deploy-commands.js` | Registers slash commands for one guild |
-| `commands/utility/` | Slash commands: `start.js`, `close.js` |
+| `commands/utility/` | Slash commands: `start.js`, `pause.js`, `resume.js`, `close.js` |
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
-| `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
+| `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |

@@ -62,7 +62,7 @@ describe('VoiceStateUpdate', () => {
 		const send = jest.fn().mockResolvedValue(undefined);
 		const getSessionByChannelId = jest.fn().mockReturnValue({
 			sessionId: 'session-1',
-			sessionState: { participantIds: ['other-user'], dmIds: [] },
+			sessionState: { participantIds: ['other-user'], dmIds: [], started: true },
 		});
 		const reconnectParticipant = jest.fn();
 		const client = createMockClient({

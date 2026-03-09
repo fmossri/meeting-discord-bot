@@ -91,44 +91,61 @@ function createStartInteraction(client, sessionId = 'session-1') {
 	return {
 		member: { voice: { channel: { id: 'voice-123' } } },
 		user: { id: 'user-1', displayName: 'Alice' },
-		guild: { id: 'guild-1', voiceAdapterCreator: {} },
+		guild: { id: 'guild-1', channels: { fetch: jest.fn().mockResolvedValue({ members: [] }) }, voiceAdapterCreator: {} },
 		reply: jest.fn().mockResolvedValue({
 			fetch: jest.fn().mockResolvedValue({ id: sessionId }),
 		}),
 		followUp: jest.fn().mockResolvedValue(undefined),
+		editReply: jest.fn().mockResolvedValue(undefined),
 		client,
 	};
 }
 
 function createAcceptInteraction(client, sessionId, userId = 'user-1') {
-	return {
+	const acceptInt = {
 		message: { id: sessionId },
 		user: { id: userId, displayName: 'Alice' },
 		reply: jest.fn().mockResolvedValue(undefined),
+		deferReply: jest.fn().mockResolvedValue(undefined),
 		deferUpdate: jest.fn().mockResolvedValue(undefined),
+		editReply: jest.fn().mockResolvedValue(undefined),
 		client,
 		customId: 'disclaimer-accept',
+		deferred: false,
 	};
+	acceptInt.deferReply = jest.fn().mockImplementation(async () => {
+		acceptInt.deferred = true;
+	});
+	return acceptInt;
 }
 
 function createCloseInteraction(client, sessionId) {
+	const confirmMsgId = 'confirm-msg-1';
 	return {
-		reply: jest.fn().mockResolvedValue({
-			fetch: jest.fn().mockResolvedValue({ id: 'confirm-msg-1' }),
+		editReply: jest.fn().mockResolvedValue({
+			id: confirmMsgId,
+			delete: jest.fn().mockResolvedValue(undefined),
 		}),
 		client,
 	};
 }
 
 function createConfirmInteraction(client, confirmMessageId = 'confirm-msg-1') {
-	return {
+	const confirmInt = {
 		message: { id: confirmMessageId },
 		user: { id: 'user-1' },
 		deferReply: jest.fn().mockResolvedValue(undefined),
 		editReply: jest.fn().mockResolvedValue(undefined),
+		deleteReply: jest.fn().mockResolvedValue(undefined),
+		followUp: jest.fn().mockResolvedValue(undefined),
 		client,
 		customId: 'close-meeting-confirm',
+		deferred: false,
 	};
+	confirmInt.deferReply = jest.fn().mockImplementation(async () => {
+		confirmInt.deferred = true;
+	});
+	return confirmInt;
 }
 
 beforeEach(() => {
@@ -161,7 +178,7 @@ describe('meeting flow integration', () => {
 
 		const acceptInt = createAcceptInteraction(client, sessionId);
 		await coordinator.handleButtonInteraction(acceptInt);
-		expect(acceptInt.reply).toHaveBeenCalledWith(
+		expect(acceptInt.editReply).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
 			})
@@ -172,10 +189,49 @@ describe('meeting flow integration', () => {
 
 		const confirmInt = createConfirmInteraction(client);
 		await coordinator.handleButtonInteraction(confirmInt);
-		expect(confirmInt.editReply).toHaveBeenCalledWith(
+		expect(startInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: expect.stringContaining(summaryText),
 			})
+		);
+	});
+
+	it('pause and resume: start → accept → pause → resume → close → summary', async () => {
+		const { client, coordinator } = createClientWithMocks();
+		const sessionId = 'session-1';
+
+		const voiceChannelWithMembers = {
+			id: 'voice-123',
+			members: [{ user: { id: 'user-1' } }],
+		};
+		const startInt = createStartInteraction(client, sessionId);
+		startInt.guild.channels.fetch = jest.fn().mockResolvedValue(voiceChannelWithMembers);
+
+		await coordinator.startMeeting(startInt);
+		const acceptInt = createAcceptInteraction(client, sessionId);
+		await coordinator.handleButtonInteraction(acceptInt);
+		expect(acceptInt.editReply).toHaveBeenCalledWith(
+			expect.objectContaining({ content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.' })
+		);
+
+		await coordinator.pauseMeeting(sessionId);
+		expect(startInt.followUp).toHaveBeenCalledWith(
+			expect.objectContaining({ content: 'Meeting recording paused.' })
+		);
+		expect(sessionStore.getSessionById(sessionId).paused).toBe(true);
+
+		await coordinator.resumeMeeting(sessionId);
+		expect(startInt.followUp).toHaveBeenCalledWith(
+			expect.objectContaining({ content: 'Meeting recording resumed.' })
+		);
+		expect(sessionStore.getSessionById(sessionId).paused).toBe(false);
+
+		const closeInt = createCloseInteraction(client, sessionId);
+		await coordinator.closeMeeting(sessionId, closeInt);
+		const confirmInt = createConfirmInteraction(client);
+		await coordinator.handleButtonInteraction(confirmInt);
+		expect(startInt.followUp).toHaveBeenCalledWith(
+			expect.objectContaining({ content: expect.stringContaining(summaryText) })
 		);
 	});
 
@@ -201,7 +257,7 @@ describe('meeting flow integration', () => {
 		const acceptInt = createAcceptInteraction(client, sessionId);
 		await coordinator.handleButtonInteraction(acceptInt);
 
-		expect(acceptInt.reply).toHaveBeenCalledWith(
+		expect(acceptInt.editReply).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: 'An error occurred while adding you as a participant.',
 			})
@@ -235,9 +291,9 @@ describe('meeting flow integration', () => {
 		const confirmInt = createConfirmInteraction(client);
 		await coordinator.handleButtonInteraction(confirmInt);
 
-		expect(confirmInt.editReply).toHaveBeenCalledWith(
+		expect(confirmInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
-				content: 'An error occurred while closing the meeting.',
+				content: 'An error occurred while handling the button interaction.',
 			})
 		);
 	});
@@ -302,7 +358,7 @@ describe('meeting flow integration', () => {
 			await coordinator.closeMeeting(sessionId, closeInt);
 			const confirmInt = createConfirmInteraction(client);
 			await coordinator.handleButtonInteraction(confirmInt);
-			expect(confirmInt.editReply).toHaveBeenCalledWith(
+			expect(startInt.followUp).toHaveBeenCalledWith(
 				expect.objectContaining({
 					content: expect.stringContaining(summaryText),
 				})
