@@ -54,6 +54,7 @@ function createMockWorker(overrides = {}) {
 function createMockReportGenerator() {
 	return {
 		generateReport: jest.fn().mockResolvedValue(reportPath),
+		insertSummary: jest.fn().mockResolvedValue(undefined),
 	};
 }
 

@@ -12,6 +12,8 @@ describe('generateReport', () => {
             createReadStream: jest.fn(),
             mkdirSync: jest.fn(),
             writeFileSync: jest.fn(),
+            readFileSync: jest.fn(),
+            renameSync: jest.fn(),
         };
         mockPath = { join: jest.fn((...args) => args.join('/')) };
         generator = createReportGenerator({ fsImpl: mockFs, pathImpl: mockPath });
@@ -69,5 +71,55 @@ describe('generateReport', () => {
         const [, content] = mockFs.writeFileSync.mock.calls[0];
         expect(content).not.toContain('  ');
         expect(content).toContain('Real content');
+    });
+});
+
+describe('insertSummary', () => {
+    it('inserts a Summary section immediately before ```text and overwrites report', async () => {
+        const mockFs = {
+            readFileSync: jest.fn(),
+            writeFileSync: jest.fn(),
+            renameSync: jest.fn(),
+        };
+        const generator = createReportGenerator({ fsImpl: mockFs, pathImpl: { join: jest.fn() } });
+        const reportPath = '/tmp/report.md';
+        const original = [
+            '# Transcript for m1 on ch1 at 01 January 2025, 00:00:00',
+            '## Participants: Alice',
+            '```text',
+            ' 00:00:00 | Alice | hello',
+            '```',
+        ].join('\n');
+        mockFs.readFileSync.mockReturnValue(original);
+
+        await generator.insertSummary(reportPath, 'This is the summary.');
+
+        expect(mockFs.writeFileSync).toHaveBeenCalledWith(
+            `${reportPath}.tmp`,
+            expect.stringContaining('## Summary'),
+            'utf8'
+        );
+        const [, writtenContent] = mockFs.writeFileSync.mock.calls[0];
+        const summaryIdx = writtenContent.indexOf('## Summary');
+        const fenceIdx = writtenContent.indexOf('```text');
+        expect(summaryIdx).toBeGreaterThan(-1);
+        expect(fenceIdx).toBeGreaterThan(-1);
+        expect(summaryIdx).toBeLessThan(fenceIdx);
+        expect(writtenContent).toContain('This is the summary.');
+        expect(mockFs.renameSync).toHaveBeenCalledWith(`${reportPath}.tmp`, reportPath);
+    });
+
+    it('throws if report does not contain a ```text code fence', async () => {
+        const mockFs = {
+            readFileSync: jest.fn().mockReturnValue('# header only\nno fence\n'),
+            writeFileSync: jest.fn(),
+            renameSync: jest.fn(),
+        };
+        const generator = createReportGenerator({ fsImpl: mockFs, pathImpl: { join: jest.fn() } });
+        await expect(generator.insertSummary('/tmp/report.md', 'summary')).rejects.toThrow(
+            'Report format error: could not find ```text code fence'
+        );
+        expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+        expect(mockFs.renameSync).not.toHaveBeenCalled();
     });
 });

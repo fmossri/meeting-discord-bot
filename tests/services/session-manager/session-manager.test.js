@@ -22,6 +22,7 @@ function createMockTranscriptWorker(overrides = {}) {
 function createMockReportGenerator(reportPath = '/tmp/test-report.md') {
 	return {
 		generateReport: jest.fn().mockResolvedValue(reportPath),
+		insertSummary: jest.fn().mockResolvedValue(undefined),
 	};
 }
 
