@@ -27,13 +27,13 @@ class Metrics(BaseModel):
     realTimeFactor: float
 
 class TranscribeRequest(BaseModel):
-    meetingId: str
+    transcriptId: str
     chunkId: int
     chunkStartTimeMs: int
     audio: str
 
 class TranscribeResponse(BaseModel):
-    meetingId: str
+    transcriptId: str
     chunkId: int
     segments: list[Segment]
     metrics: Metrics
@@ -102,7 +102,7 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
             realTimeFactor=real_time_factor)
 
         response = TranscribeResponse(
-            meetingId=request.meetingId,
+            transcriptId=request.transcriptId,
             chunkId=request.chunkId,
             segments=segments,
             metrics=metrics)

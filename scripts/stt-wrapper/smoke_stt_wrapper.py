@@ -14,7 +14,7 @@ with open(audio_path, "rb") as audio_file:
     audio_base64 = base64.b64encode(audio_data).decode("ascii") #encodes the audio data to base64
 
 request_data = {
-    "meetingId": "1234567890",
+    "transcriptId": "1234567890",
     "chunkId": 1,
     "participantId": "1234567890",
     "chunkStartTimeMs": 0,

@@ -36,15 +36,15 @@ beforeEach(() => {
 });
 
 describe('startTranscript', () => {
-    it('starts a meeting', async () => {
-        const transcriptPath = await worker.startTranscript('test-meeting');
+    it('starts a transcript', async () => {
+        const transcriptPath = await worker.startTranscript('test-transcript');
         expect(transcriptPath).toMatch(/\.jsonl$/);
         expect(mockFs.promises.mkdir).toHaveBeenCalledWith(expect.stringContaining('transcripts'), { recursive: true });
     });
 
     it('writes metadata header with channelId and participantDisplayNames', async () => {
-        await worker.startTranscript('meeting-1');
-        await worker.closeTranscript('meeting-1', {
+        await worker.startTranscript('transcript-1');
+        await worker.closeTranscript('transcript-1', {
             channelId: 'ch-123',
             participantDisplayNames: ['Alice', 'Bob']
         });
@@ -53,7 +53,7 @@ describe('startTranscript', () => {
         const header = JSON.parse(content.trim());
         expect(header).toMatchObject({
             type: 'metadata',
-            meetingId: 'meeting-1',
+            transcriptId: 'transcript-1',
             channelId: 'ch-123',
             participantDisplayNames: ['Alice', 'Bob']
         });
@@ -61,19 +61,19 @@ describe('startTranscript', () => {
 
     it('throws when mkdir fails', async () => {
         mockFs.promises.mkdir.mockRejectedValue(new Error('Permission denied'));
-        await expect(worker.startTranscript('meeting-1')).rejects.toThrow('Permission denied');
+        await expect(worker.startTranscript('transcript-1')).rejects.toThrow('Permission denied');
     });
 
     it('throws when writeFile fails on close', async () => {
-        await worker.startTranscript('meeting-1');
+        await worker.startTranscript('transcript-1');
         mockFs.promises.writeFile.mockRejectedValue(new Error('Permission denied'));
-        await expect(worker.closeTranscript('meeting-1')).rejects.toThrow('Permission denied');
+        await expect(worker.closeTranscript('transcript-1')).rejects.toThrow('Permission denied');
     });
 
     it('uses meetingStartTimeMs for meetingStartIso and filename when valid number', async () => {
         const fixedTimestamp = 1700000000000;
-        await worker.startTranscript('meeting-1', fixedTimestamp);
-        await worker.closeTranscript('meeting-1', {
+        await worker.startTranscript('transcript-1', fixedTimestamp);
+        await worker.closeTranscript('transcript-1', {
             channelId: 'ch-1',
             participantDisplayNames: ['Alice'],
         });
@@ -83,43 +83,43 @@ describe('startTranscript', () => {
     });
 
     it('falls back to Date.now() when meetingStartTimeMs is not a number', async () => {
-        const pathUndefined = await worker.startTranscript('meeting-undefined');
+        const pathUndefined = await worker.startTranscript('transcript-undefined');
         expect(pathUndefined).toMatch(/\.jsonl$/);
 
-        const pathNull = await worker.startTranscript('meeting-null', null);
+        const pathNull = await worker.startTranscript('transcript-null', null);
         expect(pathNull).toMatch(/\.jsonl$/);
     });
 });
 
 describe('enqueueChunk', () => {
-    it('throws when meeting not found', async () => {
-        await expect(worker.enqueueChunk('test-meeting', createChunk())).rejects.toThrow('Meeting not found');
+    it('throws when transcript not found', async () => {
+        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Transcript not found');
     });
 
     it('throws when chunkId is not a number', async () => {
-        await worker.startTranscript('test-meeting');
-        await expect(worker.enqueueChunk('test-meeting', createChunk({ chunkId: 'not-a-number' }))).rejects.toThrow('Chunk ID must be a number');
+        await worker.startTranscript('test-transcript');
+        await expect(worker.enqueueChunk('test-transcript', createChunk({ chunkId: 'not-a-number' }))).rejects.toThrow('Chunk ID must be a number');
     });
 
     it('throws when chunk has no participantData', async () => {
-        await worker.startTranscript('test-meeting');
-        await expect(worker.enqueueChunk('test-meeting', createChunk({ participantData: null }))).rejects.toThrow('Chunk has no participantData');
+        await worker.startTranscript('test-transcript');
+        await expect(worker.enqueueChunk('test-transcript', createChunk({ participantData: null }))).rejects.toThrow('Chunk has no participantData');
     });
 
     it('throws when wav is invalid', async () => {
-        await worker.startTranscript('test-meeting');
-        await expect(worker.enqueueChunk('test-meeting', createChunk({ audio: Buffer.from('invalid-audio') }))).rejects.toThrow('Invalid WAV buffer; must be mono 16kHz PCM');
+        await worker.startTranscript('test-transcript');
+        await expect(worker.enqueueChunk('test-transcript', createChunk({ audio: Buffer.from('invalid-audio') }))).rejects.toThrow('Invalid WAV buffer; must be mono 16kHz PCM');
     });
 
     it('enqueues a chunk', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk());
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk());
         expect(mockFetch).toHaveBeenCalled();
     });
 
     it('calls STT with correct URL and body', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 42, chunkStartTimeMs: 100 }));
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 42, chunkStartTimeMs: 100 }));
         expect(mockFetch).toHaveBeenCalledWith(
             'http://localhost:8000/transcribe',
             expect.objectContaining({
@@ -130,7 +130,7 @@ describe('enqueueChunk', () => {
         );
         const body = JSON.parse(mockFetch.mock.calls[0][1].body);
         expect(body).toMatchObject({
-            meetingId: 'test-meeting',
+            transcriptId: 'test-transcript',
             chunkId: 42,
             chunkStartTimeMs: 100,
         });
@@ -138,10 +138,10 @@ describe('enqueueChunk', () => {
     });
 
     it('processes multiple chunks in order', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 1, participantData: { participantId: 'u1', displayName: 'Alice' } }));
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 2, participantData: { participantId: 'u2', displayName: 'Bob' } }));
-        await worker.closeTranscript('test-meeting');
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1, participantData: { participantId: 'u1', displayName: 'Alice' } }));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2, participantData: { participantId: 'u2', displayName: 'Bob' } }));
+        await worker.closeTranscript('test-transcript');
         expect(mockFetch).toHaveBeenCalledTimes(2);
         // appendFile: 2 segment lines to tmp, then 1 merge (tmp content → transcript) in closeTranscript
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter(c => c[0].endsWith('.tmp'));
@@ -161,13 +161,13 @@ describe('enqueueChunk', () => {
                 }),
             });
         });
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({
             chunkId: 1,
             chunkClockTimeMs: 10000,
             chunkStartTimeMs: 0,
         }));
-        await worker.closeTranscript('test-meeting');
+        await worker.closeTranscript('test-transcript');
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
         expect(segmentCalls.length).toBeGreaterThan(0);
         const segmentLine = JSON.parse(segmentCalls[0][1]);
@@ -175,9 +175,9 @@ describe('enqueueChunk', () => {
     });
 
     it('writes clockTimeMs null when chunk has no chunkClockTimeMs', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 1 }));
-        await worker.closeTranscript('test-meeting');
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
+        await worker.closeTranscript('test-transcript');
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
         expect(segmentCalls.length).toBeGreaterThan(0);
         const segmentLine = JSON.parse(segmentCalls[0][1]);
@@ -200,11 +200,11 @@ describe('enqueueChunk', () => {
                 })
             });
         });
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 1 }));
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
         await new Promise(r => setImmediate(r));
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 2 }));
-        await worker.closeTranscript('test-meeting');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
+        await worker.closeTranscript('test-transcript');
         expect(mockFetch).toHaveBeenCalledTimes(3);
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(
             expect.any(String),
@@ -214,22 +214,22 @@ describe('enqueueChunk', () => {
 });
 
 describe('closeTranscript', () => {
-    it('throws when meeting not found', async () => {
-        await expect(worker.closeTranscript('test-meeting')).rejects.toThrow('Meeting not found');
+    it('throws when transcript not found', async () => {
+        await expect(worker.closeTranscript('test-transcript')).rejects.toThrow('Transcript not found');
     });
 
     it('returns the transcript path', async () => {
-        await worker.startTranscript('test-meeting');
-        const transcriptPath = await worker.closeTranscript('test-meeting');
+        await worker.startTranscript('test-transcript');
+        const transcriptPath = await worker.closeTranscript('test-transcript');
         expect(mockFs.promises.writeFile).toHaveBeenCalled();
         const [writeFilePath] = mockFs.promises.writeFile.mock.calls[0];
         expect(transcriptPath).toBe(writeFilePath);
     });
 
-    it('removes the meeting from the map', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.closeTranscript('test-meeting');
-        await expect(worker.enqueueChunk('test-meeting', createChunk())).rejects.toThrow('Meeting not found');
+    it('removes the transcript from the map', async () => {
+        await worker.startTranscript('test-transcript');
+        await worker.closeTranscript('test-transcript');
+        await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Transcript not found');
     });
 
     it('retries failed chunks on close', async () => {
@@ -248,24 +248,24 @@ describe('closeTranscript', () => {
                 })
             });
         });
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 1 }));
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
         await new Promise(r => setImmediate(r));
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 2 }));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await new Promise(r => setImmediate(r));
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 3 }));
-        const transcriptPath = await worker.closeTranscript('test-meeting');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
+        const transcriptPath = await worker.closeTranscript('test-transcript');
         expect(mockFetch).toHaveBeenCalledTimes(6);
         // closeTranscript appends segment content (from tmp) to final transcript path; mock readFile returns '' so we only assert path
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(transcriptPath, expect.any(String));
     });
 
     it('waits for queued chunks to be transcribed and flushed before returning', async () => {
-        await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk());
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk());
         // closeTranscript awaits processingPromise before returning; if it didn't, it could return
         // before processNextChunk finishes and appendFile would not have been called yet.
-        const transcriptPath = await worker.closeTranscript('test-meeting');
+        const transcriptPath = await worker.closeTranscript('test-transcript');
         // Segment is written to tmp, then closeTranscript appends tmp content to transcript path (mock readFile returns '').
         const mergeCall = mockFs.promises.appendFile.mock.calls.find(c => c[0] === transcriptPath);
         expect(mergeCall).toBeDefined();

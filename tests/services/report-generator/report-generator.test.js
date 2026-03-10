@@ -50,20 +50,20 @@ describe('generateReport', () => {
     });
 
     it('throws when metadata is incomplete', async () => {
-        const invalidContent = '{"type":"metadata","meetingId":"m1"}\n';
+        const invalidContent = '{"type":"metadata","transcriptId":"m1"}\n';
         mockFs.createReadStream.mockReturnValue(createReadStreamFromString(invalidContent));
         await expect(generator.generateReport('any-path')).rejects.toThrow(
-            'Invalid transcript file: metadata must contain meetingId, channelId, meetingStartIso, and participantDisplayNames'
+            'Invalid transcript file: metadata must contain transcriptId, channelId, meetingStartIso, and participantDisplayNames'
         );
         expect(mockFs.writeFileSync).not.toHaveBeenCalled();
     });
 
     it('skips segment lines with empty text', async () => {
         const transcriptContent = createMinimalTranscriptContent({
-            metadata: { type: 'metadata', meetingId: 'm1', channelId: 'ch1', meetingStartIso: '2025-01-15T14:30:00.000Z', participantDisplayNames: ['Alice'] },
+            metadata: { type: 'metadata', transcriptId: 'm1', channelId: 'ch1', meetingStartIso: '2025-01-15T14:30:00.000Z', participantDisplayNames: ['Alice'] },
             segments: [
-                { meetingId: 'm1', chunkId: 1, displayName: 'Alice', startMs: 0, endMs: 1000, text: '  ' },
-                { meetingId: 'm1', chunkId: 2, displayName: 'Alice', startMs: 1000, endMs: 2000, text: 'Real content' },
+                { transcriptId: 'm1', chunkId: 1, displayName: 'Alice', startMs: 0, endMs: 1000, text: '  ' },
+                { transcriptId: 'm1', chunkId: 2, displayName: 'Alice', startMs: 1000, endMs: 2000, text: 'Real content' },
             ],
         });
         mockFs.createReadStream.mockReturnValue(createReadStreamFromString(transcriptContent));

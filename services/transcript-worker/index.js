@@ -23,29 +23,29 @@ const transcriptWorker = createTranscriptWorker({
 	pathImpl: path,
 });
 
-app.post('/start-meeting', async (req, res) => {
+app.post('/start-transcript', async (req, res) => {
 	try {
-		const { meetingId } = req.body;
-		if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
-		const transcriptPath = await transcriptWorker.startTranscript(meetingId);
+		const { transcriptId } = req.body;
+		if (!transcriptId) return res.status(400).json({ error: 'Transcript ID is required' });
+		const transcriptPath = await transcriptWorker.startTranscript(transcriptId);
 		res.json({ started: true, transcriptPath });
 	} catch (error) {
-		console.error('Error starting meeting:', error);
+		console.error('Error starting transcript:', error);
 		res.status(500).json({ error: error.message });
 	}
 });
 
 app.post('/enqueue-chunk', async (req, res) => {
 	try {
-		const { meetingId, chunk } = req.body;
-		if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
+		const { transcriptId, chunk } = req.body;
+		if (!transcriptId) return res.status(400).json({ error: 'Transcript ID is required' });
 		if (!chunk) return res.status(400).json({ error: 'Chunk is required' });
 
 		if (typeof chunk.audio === 'string') {
 			chunk.audio = Buffer.from(chunk.audio, 'base64');
 		}
 
-		const result = await transcriptWorker.enqueueChunk(meetingId, chunk);
+		const result = await transcriptWorker.enqueueChunk(transcriptId, chunk);
 		res.json(result);
 	} catch (error) {
 		console.error('Error enqueuing chunk:', error);
@@ -53,17 +53,17 @@ app.post('/enqueue-chunk', async (req, res) => {
 	}
 });
 
-app.post('/close-meeting', async (req, res) => {
+app.post('/close-transcript', async (req, res) => {
 	try {
-		const { meetingId, channelId, participantDisplayNames } = req.body;
-		if (!meetingId) return res.status(400).json({ error: 'Meeting ID is required' });
-		const transcriptPath = await transcriptWorker.closeTranscript(meetingId, {
+		const { transcriptId, channelId, participantDisplayNames } = req.body;
+		if (!transcriptId) return res.status(400).json({ error: 'Transcript ID is required' });
+		const transcriptPath = await transcriptWorker.closeTranscript(transcriptId, {
 			channelId: channelId ?? undefined,
 			participantDisplayNames: participantDisplayNames ?? undefined,
 		});
 		res.json({ transcriptPath });
 	} catch (error) {
-		console.error('Error closing meeting:', error);
+		console.error('Error closing transcript:', error);
 		res.status(500).json({ error: error.message });
 	}
 });

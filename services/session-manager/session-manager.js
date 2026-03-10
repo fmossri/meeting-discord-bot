@@ -196,7 +196,7 @@ function createSessionManager({
 			sessionState.transcriptPath = await transcriptWorker.startTranscript(sessionId, meetingStartTimeMs);
 			return true;
 		} catch (error) {
-			console.error('error starting meeting.', error);
+			console.error('error starting session.', error);
 			return false;
 		}
 	}

@@ -63,12 +63,12 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                     throw new Error(`Invalid transcript file: first line must be type = metadata`);
                 }
                 
-                sessionId = JSONLine.meetingId;
+                sessionId = JSONLine.transcriptId;
                 channelId = JSONLine.channelId;
                 meetingStartIso = JSONLine.meetingStartIso;
                 participantDisplayNames = JSONLine.participantDisplayNames;
                 if (!sessionId || !channelId || !meetingStartIso || !participantDisplayNames?.length) {
-                    throw new Error(`Invalid transcript file: metadata must contain meetingId, channelId, meetingStartIso, and participantDisplayNames (with at least one participant)`);
+                    throw new Error(`Invalid transcript file: metadata must contain transcriptId, channelId, meetingStartIso, and participantDisplayNames (with at least one participant)`);
                 }
                 timeColumnWidth = " hh:mm:ss ".length;
                 nameColumnWidth = Math.max(...participantDisplayNames.map(name => name.length)) + 2;

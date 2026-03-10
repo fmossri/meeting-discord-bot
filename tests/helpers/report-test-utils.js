@@ -8,15 +8,15 @@ const { Readable } = require('node:stream');
 function createMinimalTranscriptContent(overrides = {}) {
     const metadata = {
         type: 'metadata',
-        meetingId: 'test-meeting-1',
+        transcriptId: 'test-transcript-1',
         channelId: 'test-ch-123',
         meetingStartIso: '2025-01-15T14:30:00.000Z',
         participantDisplayNames: ['Alice', 'Bob'],
         ...overrides.metadata,
     };
     const segments = overrides.segments ?? [
-        { meetingId: 'test-meeting-1', chunkId: 1, participantId: 'u1', displayName: 'Alice', startMs: 0, endMs: 5000, text: 'Hello, this is a test segment.' },
-        { meetingId: 'test-meeting-1', chunkId: 2, participantId: 'u2', displayName: 'Bob', startMs: 5000, endMs: 10000, text: 'Hi Alice, I agree with that.' },
+        { transcriptId: 'test-transcript-1', chunkId: 1, participantId: 'u1', displayName: 'Alice', startMs: 0, endMs: 5000, text: 'Hello, this is a test segment.' },
+        { transcriptId: 'test-transcript-1', chunkId: 2, participantId: 'u2', displayName: 'Bob', startMs: 5000, endMs: 10000, text: 'Hi Alice, I agree with that.' },
     ];
     const lines = [JSON.stringify(metadata), ...segments.map(s => JSON.stringify(s))];
     return lines.join('\n');

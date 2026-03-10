@@ -18,12 +18,12 @@ function isValidWav(audioBuffer) {
 }
 
 function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
-	const meetingsMap = new Map();
+	const transcriptsMap = new Map();
 
-	async function writeTranscriptHeader(transcriptPath, { meetingId, channelId, meetingStartIso, participantDisplayNames }) {
+	async function writeTranscriptHeader(transcriptPath, { transcriptId, channelId, meetingStartIso, participantDisplayNames }) {
 		const header = {
 			type: 'metadata',
-			meetingId,
+			transcriptId,
 			channelId: channelId ?? null,
 			meetingStartIso,
 			participantDisplayNames: Array.isArray(participantDisplayNames) ? participantDisplayNames : [],
@@ -36,7 +36,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 	}
 
-	async function startTranscript(meetingId, meetingStartTimeMs) {
+	async function startTranscript(transcriptId, meetingStartTimeMs) {
 		try {
             if (typeof meetingStartTimeMs !== 'number') {
                 meetingStartTimeMs = Date.now();
@@ -44,10 +44,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			await fsImpl.promises.mkdir(pathImpl.join(__dirname, 'transcripts'), { recursive: true });
             const meetingStartTimeIso = new Date(meetingStartTimeMs).toISOString();
 			const timestamp = meetingStartTimeIso.replace(/[:.]/g, '-');
-			const transcriptPath = pathImpl.join(__dirname, 'transcripts', `${meetingId}_${timestamp}.jsonl`);
-			const tempFilePath = pathImpl.join(__dirname, 'transcripts', `${meetingId}_${timestamp}.jsonl.tmp`);
+			const transcriptPath = pathImpl.join(__dirname, 'transcripts', `${transcriptId}_${timestamp}.jsonl`);
+			const tempFilePath = pathImpl.join(__dirname, 'transcripts', `${transcriptId}_${timestamp}.jsonl.tmp`);
 
-			meetingsMap.set(meetingId, {
+			transcriptsMap.set(transcriptId, {
 				chunksQueue: [],
 				processedChunks: [],
 				failedChunks: [],
@@ -63,30 +63,30 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			});
 			return transcriptPath;
 		} catch (error) {
-			console.error('Error starting meeting:', error);
+			console.error('Error starting transcript:', error);
 			throw error;
 		}
 	}
 
-	function ensureProcessing(meetingId) {
-		if (!meetingsMap.has(meetingId)) {
-			throw new Error('Meeting not found');
+	function ensureProcessing(transcriptId) {
+		if (!transcriptsMap.has(transcriptId)) {
+			throw new Error('Transcript not found');
 		}
-		const meeting = meetingsMap.get(meetingId);
-		if (!meeting.transcriptState.processingPromise) {
-			meeting.transcriptState.processingPromise = processNextChunk(meetingId)
+		const transcript = transcriptsMap.get(transcriptId);
+		if (!transcript.transcriptState.processingPromise) {
+			transcript.transcriptState.processingPromise = processNextChunk(transcriptId)
 				.finally(() => {
-					meeting.transcriptState.processingPromise = null;
+					transcript.transcriptState.processingPromise = null;
 				});
 		}
-		return meeting.transcriptState.processingPromise;
+		return transcript.transcriptState.processingPromise;
 	}
 
-	async function enqueueChunk(meetingId, chunk) {
-		if (!meetingsMap.has(meetingId)) {
-			throw new Error('Meeting not found');
+	async function enqueueChunk(transcriptId, chunk) {
+		if (!transcriptsMap.has(transcriptId)) {
+			throw new Error('Transcript not found');
 		}
-		const meeting = meetingsMap.get(meetingId);
+		const transcript = transcriptsMap.get(transcriptId);
 		try {
 			if (typeof chunk.chunkId !== 'number') {
 				throw new Error('Chunk ID must be a number');
@@ -101,10 +101,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			chunk.displayName = chunk.participantData.displayName;
 			chunk.segmentBuffer = [];
 			chunk.retryCount = 0;
-			meeting.chunksQueue.push(chunk);
+			transcript.chunksQueue.push(chunk);
 
-			if (!meeting.transcriptState.processingPromise) {
-				ensureProcessing(meetingId);
+			if (!transcript.transcriptState.processingPromise) {
+				ensureProcessing(transcriptId);
 			}
 		} catch (error) {
 			console.error('Error enqueuing chunk:', error);
@@ -112,17 +112,17 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 	}
 
-	async function appendToTemp(meetingId) {
-		if (!meetingsMap.has(meetingId)) {
-			throw new Error('Meeting not found');
+	async function appendToTemp(transcriptId) {
+		if (!transcriptsMap.has(transcriptId)) {
+			throw new Error('Transcript not found');
 		}
-		const meeting = meetingsMap.get(meetingId);
+		const transcript = transcriptsMap.get(transcriptId);
 		try {
-			const tempPath = meeting.transcriptState.tmpPath;
-			for (const chunk of meeting.processedChunks) {
+			const tempPath = transcript.transcriptState.tmpPath;
+			for (const chunk of transcript.processedChunks) {
 				for (const segment of chunk.segmentBuffer) {
 					const JSONLine = {
-						meetingId: meetingId,
+						transcriptId: transcriptId,
 						chunkId: chunk.chunkId,
 						participantId: chunk.participantId,
 						displayName: chunk.displayName,
@@ -134,30 +134,30 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					await fsImpl.promises.appendFile(tempPath, JSON.stringify(JSONLine) + '\n');
 				}
 			}
-			meeting.processedChunks = [];
-			meeting.transcriptState.processedSinceFlush = 0;
+			transcript.processedChunks = [];
+			transcript.transcriptState.processedSinceFlush = 0;
 		} catch (error) {
 			console.error('Error writing transcript file:', error);
 			throw error;
 		}
 	}
 
-	async function processNextChunk(meetingId) {
+	async function processNextChunk(transcriptId) {
 		try {
-			if (!meetingsMap.has(meetingId)) {
-				throw new Error('Meeting not found');
+			if (!transcriptsMap.has(transcriptId)) {
+				throw new Error('Transcript not found');
 			}
-			const meeting = meetingsMap.get(meetingId);
-			if (meeting.chunksQueue.length === 0) {
-				meeting.inFlight = false;
+			const transcript = transcriptsMap.get(transcriptId);
+			if (transcript.chunksQueue.length === 0) {
+				transcript.inFlight = false;
 				return;
 			}
-			meeting.inFlight = true;
+			transcript.inFlight = true;
 			const postUrl = sttBaseUrl + '/transcribe';
 
-			while (meeting.chunksQueue.length > 0) {
-				const chunk = meeting.chunksQueue.shift();
-				meeting.chunksBucket.set(chunk.chunkId, chunk);
+			while (transcript.chunksQueue.length > 0) {
+				const chunk = transcript.chunksQueue.shift();
+				transcript.chunksBucket.set(chunk.chunkId, chunk);
 				const audioBuffer = Buffer.from(chunk.audio).toString('base64');
 
 				const response = await fetchImpl(postUrl, {
@@ -166,7 +166,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						'Content-Type': 'application/json',
 					},
 					body: JSON.stringify({
-						meetingId: meetingId,
+						transcriptId: transcriptId,
 						chunkId: chunk.chunkId,
 						chunkStartTimeMs: chunk.chunkStartTimeMs,
 						audio: audioBuffer,
@@ -177,86 +177,86 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					console.error('Failed to transcribe chunk. Retrying:', response.status, response.statusText);
 					chunk.retryCount++;
 					if (chunk.retryCount < MAX_RETRIES) {
-						meeting.chunksQueue.unshift(chunk);
-						meeting.chunksBucket.delete(chunk.chunkId);
+						transcript.chunksQueue.unshift(chunk);
+						transcript.chunksBucket.delete(chunk.chunkId);
 						break;
 					} else {
 						console.error('Failed to transcribe chunk after ' + MAX_RETRIES + ' retries');
-						meeting.chunksBucket.delete(chunk.chunkId);
-						meeting.failedChunks.push(chunk);
+						transcript.chunksBucket.delete(chunk.chunkId);
+						transcript.failedChunks.push(chunk);
 						continue;
 					}
 				}
 
 				const responseJson = await response.json();
-				if (meeting.chunksBucket.has(responseJson.chunkId)) {
-					const chunk = meeting.chunksBucket.get(responseJson.chunkId);
+				if (transcript.chunksBucket.has(responseJson.chunkId)) {
+					const chunk = transcript.chunksBucket.get(responseJson.chunkId);
 					chunk.segmentBuffer.push(...responseJson.segments);
 					chunk.audio = null;
-					meeting.processedChunks.push(chunk);
-					meeting.transcriptState.processedSinceFlush++;
-					meeting.chunksBucket.delete(responseJson.chunkId);
+					transcript.processedChunks.push(chunk);
+					transcript.transcriptState.processedSinceFlush++;
+					transcript.chunksBucket.delete(responseJson.chunkId);
 				}
-				if (meeting.transcriptState.processedSinceFlush >= 5) {
-					await appendToTemp(meetingId);
+				if (transcript.transcriptState.processedSinceFlush >= 5) {
+					await appendToTemp(transcriptId);
 				}
 			}
-			if (meeting.processedChunks.length > 0) {
-				await appendToTemp(meetingId);
+			if (transcript.processedChunks.length > 0) {
+				await appendToTemp(transcriptId);
 			}
-			meeting.inFlight = false;
+			transcript.inFlight = false;
 		} catch (error) {
 			console.error('Error processing next chunk:', error);
 			throw error;
 		}
 	}
 
-	async function closeTranscript(meetingId, { channelId, participantDisplayNames } = {}) {
-		if (!meetingsMap.has(meetingId)) {
-			throw new Error('Meeting not found');
+	async function closeTranscript(transcriptId, { channelId, participantDisplayNames } = {}) {
+		if (!transcriptsMap.has(transcriptId)) {
+			throw new Error('Transcript not found');
 		}
-		const meeting = meetingsMap.get(meetingId);
+		const transcript = transcriptsMap.get(transcriptId);
 		try {
 			// Drain queue: process all remaining chunks and flush to tmp before building final transcript
-			while (meeting.chunksQueue.length > 0 || meeting.transcriptState.processingPromise) {
-				if (meeting.transcriptState.processingPromise) {
-					await meeting.transcriptState.processingPromise;
+			while (transcript.chunksQueue.length > 0 || transcript.transcriptState.processingPromise) {
+				if (transcript.transcriptState.processingPromise) {
+					await transcript.transcriptState.processingPromise;
 				} else {
-					ensureProcessing(meetingId);
-					if (meeting.transcriptState.processingPromise) {
-						await meeting.transcriptState.processingPromise;
+					ensureProcessing(transcriptId);
+					if (transcript.transcriptState.processingPromise) {
+						await transcript.transcriptState.processingPromise;
 					}
 				}
 			}
 			// Flush any remaining processed chunks to tmp
-			if (meeting.processedChunks.length > 0) {
-				await appendToTemp(meetingId);
+			if (transcript.processedChunks.length > 0) {
+				await appendToTemp(transcriptId);
 			}
-			if (meeting.failedChunks.length > 0) {
-				for (const chunk of meeting.failedChunks) {
+			if (transcript.failedChunks.length > 0) {
+				for (const chunk of transcript.failedChunks) {
 					chunk.retryCount = 0;
 					chunk.segmentBuffer = [];
-					meeting.chunksQueue.push(chunk);
+					transcript.chunksQueue.push(chunk);
 				}
-				meeting.failedChunks = [];
-				await ensureProcessing(meetingId);
-				if (meeting.transcriptState.processingPromise) {
-					await meeting.transcriptState.processingPromise;
+				transcript.failedChunks = [];
+				await ensureProcessing(transcriptId);
+				if (transcript.transcriptState.processingPromise) {
+					await transcript.transcriptState.processingPromise;
 				}
-				if (meeting.processedChunks.length > 0) {
-					await appendToTemp(meetingId);
+				if (transcript.processedChunks.length > 0) {
+					await appendToTemp(transcriptId);
 				}
-				if (meeting.failedChunks.length > 0) {
-					const failedChunkStartTimes = meeting.failedChunks.map((chunk, i) => `chunk ${i}: ${chunk.chunkStartTimeMs}ms`).join(', ');
-					console.error(`${meeting.failedChunks.length} chunks failed to transcribe: ${failedChunkStartTimes}`);
+				if (transcript.failedChunks.length > 0) {
+					const failedChunkStartTimes = transcript.failedChunks.map((chunk, i) => `chunk ${i}: ${chunk.chunkStartTimeMs}ms`).join(', ');
+					console.error(`${transcript.failedChunks.length} chunks failed to transcribe: ${failedChunkStartTimes}`);
 				}
 			}
-			const transcriptPath = meeting.transcriptState.filePath;
-			const tmpPath = meeting.transcriptState.tmpPath;
+			const transcriptPath = transcript.transcriptState.filePath;
+			const tmpPath = transcript.transcriptState.tmpPath;
 			await writeTranscriptHeader(transcriptPath, {
-				meetingId,
+				transcriptId,
 				channelId: channelId,
-				meetingStartIso: meeting.meetingStartIso,
+				meetingStartIso: transcript.meetingStartIso,
 				participantDisplayNames: participantDisplayNames,
 			});
 			try {
@@ -266,7 +266,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			} catch (err) {
 				if (err.code !== 'ENOENT') throw err;
 			}
-			meetingsMap.delete(meetingId);
+			transcriptsMap.delete(transcriptId);
 			return transcriptPath;
 		} catch (error) {
 			throw new Error(error.message);
