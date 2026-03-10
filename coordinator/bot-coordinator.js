@@ -421,6 +421,9 @@ function createBotCoordinator(sessionStore) {
         try {
             stopVoiceCapture(sessionId);
             sessionState.paused = true;
+            const client = sessionState.originalInteraction.client;
+            await client.sessionManager.pauseSession(sessionId);
+            
             const pauseTimeoutId = setTimeout(async () => {
                 console.log('pause timeout expired.');
                 await executeClose(sessionId, true);

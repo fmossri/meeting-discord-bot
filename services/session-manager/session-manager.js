@@ -140,7 +140,38 @@ function createSessionManager({
 				});
 		}
 		return sessionState.processingPromise;
+	}
 
+    async function pauseSession(sessionId) {
+        const sessionState = sessionStates.get(sessionId);
+        if (!sessionState) {
+            console.error('no session state found.', sessionId);
+            return false;
+        }
+        const storeSession = sessionStore.getSessionById(sessionId);
+        if (!storeSession?.paused) {
+            console.error('session not paused.', sessionId);
+            return false;
+        }
+        try {
+            for (const [participantId, participantState] of sessionState.participantStates) {
+                if (!participantState?.chunkerState) {
+                    console.error('participant state not found.', participantId);
+                    continue;
+                }
+                const participant = { participantId: participantId, participantState: participantState };
+                const samplesInBuffer = participantState.chunkerState.samplesInBuffer;
+                if (samplesInBuffer > 0) {
+                    const chunk = cutChunk(sessionId, participant, samplesInBuffer);
+                    sessionState.chunksQueue.push(chunk);
+                    ensureProcessing(sessionId);
+                }
+            }
+            return true;
+        } catch (error) {
+            console.error('error pausing session.', error);
+            throw error;
+        }
     }
 
 	async function startSession(sessionId) {
@@ -200,6 +231,7 @@ function createSessionManager({
 
 	return {
 		startSession,
+		pauseSession,
 		closeSession,
 		chunkStream,
 	};
