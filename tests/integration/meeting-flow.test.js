@@ -342,7 +342,6 @@ describe('meeting flow integration', () => {
 					chunkId,
 					participantData: { participantId: 'user-1', displayName: 'Alice' },
 					chunkStartTimeMs: (chunkId - 1) * 5000,
-					chunkEndTimeMs: chunkId * 5000,
 					audio: wavBuffer,
 				});
 			}

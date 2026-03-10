@@ -15,7 +15,6 @@ function createChunk(overrides = {}) {
     return {
         chunkId: 1,
         chunkStartTimeMs: 0,
-        chunkEndTimeMs: 30000,
         participantData: { participantId: 'user-123', displayName: 'Alice' },
         audio: createValidWavBuffer(),
         ...overrides,

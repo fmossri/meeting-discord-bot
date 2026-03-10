@@ -69,6 +69,26 @@ describe('startTranscript', () => {
         mockFs.promises.writeFile.mockRejectedValue(new Error('Permission denied'));
         await expect(worker.closeTranscript('meeting-1')).rejects.toThrow('Permission denied');
     });
+
+    it('uses meetingStartTimeMs for meetingStartIso and filename when valid number', async () => {
+        const fixedTimestamp = 1700000000000;
+        await worker.startTranscript('meeting-1', fixedTimestamp);
+        await worker.closeTranscript('meeting-1', {
+            channelId: 'ch-1',
+            participantDisplayNames: ['Alice'],
+        });
+        const [, headerContent] = mockFs.promises.writeFile.mock.calls[0];
+        const header = JSON.parse(headerContent.trim());
+        expect(header.meetingStartIso).toBe(new Date(fixedTimestamp).toISOString());
+    });
+
+    it('falls back to Date.now() when meetingStartTimeMs is not a number', async () => {
+        const pathUndefined = await worker.startTranscript('meeting-undefined');
+        expect(pathUndefined).toMatch(/\.jsonl$/);
+
+        const pathNull = await worker.startTranscript('meeting-null', null);
+        expect(pathNull).toMatch(/\.jsonl$/);
+    });
 });
 
 describe('enqueueChunk', () => {
@@ -86,11 +106,6 @@ describe('enqueueChunk', () => {
         await expect(worker.enqueueChunk('test-meeting', createChunk({ participantData: null }))).rejects.toThrow('Chunk has no participantData');
     });
 
-    it('throws when chunkStartTimeMs is greater than chunkEndTimeMs', async () => {
-        await worker.startTranscript('test-meeting');
-        await expect(worker.enqueueChunk('test-meeting', createChunk({ chunkStartTimeMs: 1000, chunkEndTimeMs: 0 }))).rejects.toThrow('Chunk start time must be before end time');
-    });
-
     it('throws when wav is invalid', async () => {
         await worker.startTranscript('test-meeting');
         await expect(worker.enqueueChunk('test-meeting', createChunk({ audio: Buffer.from('invalid-audio') }))).rejects.toThrow('Invalid WAV buffer; must be mono 16kHz PCM');
@@ -104,7 +119,7 @@ describe('enqueueChunk', () => {
 
     it('calls STT with correct URL and body', async () => {
         await worker.startTranscript('test-meeting');
-        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 42, chunkStartTimeMs: 100, chunkEndTimeMs: 4000 }));
+        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 42, chunkStartTimeMs: 100 }));
         expect(mockFetch).toHaveBeenCalledWith(
             'http://localhost:8000/transcribe',
             expect.objectContaining({
@@ -118,7 +133,6 @@ describe('enqueueChunk', () => {
             meetingId: 'test-meeting',
             chunkId: 42,
             chunkStartTimeMs: 100,
-            chunkEndTimeMs: 4000,
         });
         expect(body.audio).toBeDefined();
     });
@@ -134,6 +148,40 @@ describe('enqueueChunk', () => {
         expect(segmentCalls.length).toBe(2);
         expect(JSON.parse(segmentCalls[0][1])).toMatchObject({ chunkId: 1, participantId: 'u1', displayName: 'Alice' });
         expect(JSON.parse(segmentCalls[1][1])).toMatchObject({ chunkId: 2, participantId: 'u2', displayName: 'Bob' });
+    });
+
+    it('writes clockTimeMs when chunk has chunkClockTimeMs', async () => {
+        mockFetch.mockImplementation((url, options) => {
+            const body = JSON.parse(options.body);
+            return Promise.resolve({
+                status: 200,
+                json: () => Promise.resolve({
+                    chunkId: body.chunkId,
+                    segments: [{ startMs: 500, endMs: 1500, text: 'transcribed' }],
+                }),
+            });
+        });
+        await worker.startTranscript('test-meeting');
+        await worker.enqueueChunk('test-meeting', createChunk({
+            chunkId: 1,
+            chunkClockTimeMs: 10000,
+            chunkStartTimeMs: 0,
+        }));
+        await worker.closeTranscript('test-meeting');
+        const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
+        expect(segmentCalls.length).toBeGreaterThan(0);
+        const segmentLine = JSON.parse(segmentCalls[0][1]);
+        expect(segmentLine.clockTimeMs).toBe(10500);
+    });
+
+    it('writes clockTimeMs null when chunk has no chunkClockTimeMs', async () => {
+        await worker.startTranscript('test-meeting');
+        await worker.enqueueChunk('test-meeting', createChunk({ chunkId: 1 }));
+        await worker.closeTranscript('test-meeting');
+        const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
+        expect(segmentCalls.length).toBeGreaterThan(0);
+        const segmentLine = JSON.parse(segmentCalls[0][1]);
+        expect(segmentLine.clockTimeMs).toBeNull();
     });
 
     it('retries STT on non-200 and succeeds when processing is triggered again', async () => {

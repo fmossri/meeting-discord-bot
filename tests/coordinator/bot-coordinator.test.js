@@ -203,6 +203,7 @@ describe('Bot Coordinator', () => {
 	describe('pauseMeeting', () => {
 		it('sets sessionState.paused and pauseTimeoutId when session exists', async () => {
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
+			const pauseSessionMock = jest.fn();
 			const sessionState = {
 				participantIds: ['user-1'],
 				voiceConnection: { destroy: jest.fn(), receiver: { subscribe: mockReceiverSubscribe } },
@@ -210,7 +211,7 @@ describe('Bot Coordinator', () => {
 				originalInteraction: {
 					followUp: jest.fn().mockResolvedValue(undefined),
 					editReply: jest.fn().mockResolvedValue(undefined),
-					client: { sessionManager: { closeSession: closeSessionMock } },
+					client: { sessionManager: { closeSession: closeSessionMock, pauseSession: pauseSessionMock } },
 				},
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 			};
@@ -221,6 +222,7 @@ describe('Bot Coordinator', () => {
 
 			expect(sessionState.paused).toBe(true);
 			expect(sessionState.timeouts.pauseTimeoutId).not.toBeNull();
+			expect(pauseSessionMock).toHaveBeenCalledWith('session-1');
 		});
 
 	});
