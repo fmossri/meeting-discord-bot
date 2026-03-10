@@ -1,6 +1,6 @@
 # Tsummix
 
-**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Test suite in place (unit + integration).
+**Status:** Early (v0.2). Core flow works: start → disclaimer → accept → capture → close → transcript, report, and summary in Discord. Pause and resume supported. Auto-close when the room is empty for too long. Test suite in place (unit + integration).
 
 A Discord bot that implements STT and summarization capabilities.
 
@@ -14,6 +14,7 @@ A Discord bot that implements STT and summarization capabilities.
 - **`/pause`** — Pause recording: stop audio capture and sending chunks. Worker drains existing chunks and idles. Transcript state preserved.
 - **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
+- **Auto-close on empty room** — If everyone leaves the voice channel without `/close`, the bot pauses and waits. After a configurable timeout with no one rejoining, it auto-closes the meeting and posts a message. Timeouts are set in `config/timeouts.js` (explicit pause, paused-empty-room, empty-room, UI confirm).
 - Session state stored in memory (no database). A **coordinator** (`coordinator/bot-coordinator.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
 
 ### STT wrapper (Python)
@@ -41,7 +42,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Flow
 
-After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord.
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord. If everyone leaves without closing, the bot auto-closes after a timeout (see `config/timeouts.js`).
 
 **Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
 
@@ -187,6 +188,7 @@ Copy `.env-example` to `.env` and set:
 | `commands/utility/` | Slash commands: `start.js`, `pause.js`, `resume.js`, `close.js` |
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
+| `config/timeouts.js` | Timeout values in ms: explicit pause, paused-empty-room, empty-room, UI confirm |
 | `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |

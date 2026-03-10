@@ -36,11 +36,14 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 	}
 
-	async function startTranscript(meetingId) {
+	async function startTranscript(meetingId, meetingStartTimeMs) {
 		try {
+            if (typeof meetingStartTimeMs !== 'number') {
+                meetingStartTimeMs = Date.now();
+            }
 			await fsImpl.promises.mkdir(pathImpl.join(__dirname, 'transcripts'), { recursive: true });
-			const meetingStartTime = new Date().toISOString();
-			const timestamp = meetingStartTime.replace(/[:.]/g, '-');
+            const meetingStartTimeIso = new Date(meetingStartTimeMs).toISOString();
+			const timestamp = meetingStartTimeIso.replace(/[:.]/g, '-');
 			const transcriptPath = pathImpl.join(__dirname, 'transcripts', `${meetingId}_${timestamp}.jsonl`);
 			const tempFilePath = pathImpl.join(__dirname, 'transcripts', `${meetingId}_${timestamp}.jsonl.tmp`);
 
@@ -50,7 +53,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				failedChunks: [],
 				chunksBucket: new Map(),
 				inFlight: false,
-				meetingStartIso: meetingStartTime,
+				meetingStartIso: meetingStartTimeIso,
 				transcriptState: {
 					filePath: transcriptPath,
 					tmpPath: tempFilePath,
@@ -126,6 +129,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						chunkId: chunk.chunkId,
 						participantId: chunk.participantId,
 						displayName: chunk.displayName,
+                        clockTimeMs: chunk.chunkClockTimeMs != null ?chunk.chunkClockTimeMs + (segment.startMs - chunk.chunkStartTimeMs) : null,
 						startMs: segment.startMs,
 						endMs: segment.endMs,
 						text: segment.text,

@@ -41,13 +41,19 @@ function createSessionManager({
 			let samplesBuffer = participantState.chunkerState.samplesBuffer;
 			let samplesInBuffer = participantState.chunkerState.samplesInBuffer;
 			let totalSamplesEmitted = participantState.chunkerState.totalSamplesEmitted;
+            let chunkClockTimeMs = null;
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
 				let samplesInThisBuffer = pcmBuffer.length / 2;
+                if (samplesInBuffer === 0) {
+                    chunkClockTimeMs = Date.now();
+                    participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
+                }
 				samplesBuffer = Buffer.concat([samplesBuffer, pcmBuffer]);
 				samplesInBuffer += samplesInThisBuffer;
 
 				while (samplesInBuffer >= TARGET_SAMPLES) {
+
 					const chunkPCMBuffer = samplesBuffer.subarray(0, TARGET_BYTES);
 					samplesBuffer = samplesBuffer.subarray(TARGET_BYTES);
 					const wavBuffer = convertPCMToWav(chunkPCMBuffer, SAMPLE_RATE);
@@ -59,6 +65,7 @@ function createSessionManager({
 					const chunk = {
 						chunkId: getNextChunkId(sessionId),
 						participantData: participantData,
+                        chunkClockTimeMs: chunkClockTimeMs,
 						chunkStartTimeMs: chunkStartTimeMs,
 						chunkEndTimeMs: chunkEndTimeMs,
 						audio: wavBuffer,
@@ -67,6 +74,8 @@ function createSessionManager({
 					ensureProcessing(sessionId);
 					totalSamplesEmitted += TARGET_SAMPLES;
 					samplesInBuffer -= TARGET_SAMPLES;
+                    chunkClockTimeMs = Date.now();
+                    participantState.chunkerState.chunkClockTimeMs = chunkClockTimeMs;
 					participantState.chunkerState.samplesBuffer = samplesBuffer;
 					participantState.chunkerState.samplesInBuffer = samplesInBuffer;
 					participantState.chunkerState.totalSamplesEmitted = totalSamplesEmitted;
@@ -109,7 +118,8 @@ function createSessionManager({
 				});
 		}
 		return sessionState.processingPromise;
-	}
+
+    }
 
 	async function startSession(sessionId) {
 		const session = sessionStore.getSessionById(sessionId);
@@ -129,7 +139,8 @@ function createSessionManager({
 				participantStates: session.participantStates,
 			};
 			sessionStates.set(sessionId, sessionState);
-			sessionState.transcriptPath = await transcriptWorker.startTranscript(sessionId);
+            const meetingStartTimeMs = Date.now();
+			sessionState.transcriptPath = await transcriptWorker.startTranscript(sessionId, meetingStartTimeMs);
 			return true;
 		} catch (error) {
 			console.error('error starting meeting.', error);
@@ -137,8 +148,7 @@ function createSessionManager({
 		}
 	}
 
-	function pauseSession(sessionId) {}
-	function resumeSession(sessionId) {}
+
 
 	async function closeSession(sessionId) {
 		const sessionState = sessionStates.get(sessionId);

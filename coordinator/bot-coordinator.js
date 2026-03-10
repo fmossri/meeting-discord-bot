@@ -171,6 +171,7 @@ function createBotCoordinator(sessionStore) {
             displayName: interaction.user.displayName,
             pcmStream: null,
             chunkerState: {
+                chunkClockTimeMs: null,
                 samplesBuffer: Buffer.alloc(0),
                 samplesInBuffer: 0,
                 totalSamplesEmitted: 0,
