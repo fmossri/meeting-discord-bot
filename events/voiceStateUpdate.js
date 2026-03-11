@@ -1,9 +1,6 @@
 const { Events } = require('discord.js');
 const timeoutDuration = require('../config/timeouts');
 
-const LATE_JOINER_DM =
-	'A meeting with recording is in progress in this channel. To join as a participant, click **Accept** on the disclaimer message in the channel. To decline being recorded, click **Reject**.';
-
 module.exports = {
 	name: Events.VoiceStateUpdate,
 	async execute(oldState, newState, client) {
@@ -55,45 +52,13 @@ module.exports = {
 
         // User joined the meeting channel (to null OR another channel)
         const newSession = newState.channelId
-        ? client.sessionStore.getSessionByChannelId(newState.channelId)
-        : null;
-        // Not our meeting channel or not started -> do nothing.
+            ? client.sessionStore.getSessionByChannelId(newState.channelId)
+            : null;
         if (!newSession || !newSession.sessionState.started) {
             return;
-          }
-          const sessionState = newSession.sessionState;
-          const userId = newState.id;
-
-        // User is a participant
-        if (sessionState.participantIds.includes(userId)) {
-            // Not paused, user is a participant -> reconnect
-            if (!sessionState.paused) {
-                await client.botCoordinator.reconnectParticipant(newSession.sessionId, userId);
-                return;
-            // Paused, user is a participant -> resets pause timeout to explicitPauseMs timeout and auto-closes after explicitPauseMs timeout
-            } else {
-                clearTimeout(sessionState.timeouts.pauseTimeoutId);
-                sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
-                    await client.botCoordinator.autoCloseMeeting(newSession.sessionId);
-                }, timeoutDuration.explicitPauseMs);
-            }
-            return;
         }
-        // User has explicitly rejected earlier -> do nothing.
-        if (sessionState.rejectedIds.includes(userId)) {
-            return;
-        
-        }
-        // Meeting started, user is not a participant and hasn't rejected or been sent a DM yet -> send late joiner DM
-        if (sessionState.started && !sessionState.dmIds.includes(userId)) {
-            const user = newState.member?.user ?? (await client.users.fetch(userId).catch(() => null));
-            if (user) {
-                await user.send(LATE_JOINER_DM).catch((err) => {
-                    console.error('Could not DM late joiner:', err.message);
-                });
-                sessionState.dmIds.push(userId);
-            }
-            return;
-        }
+        const userId = newState.id;
+        const user = newState.member?.user ?? (await client.users.fetch(userId).catch(() => null));
+        await client.botCoordinator.handleUserJoinedMeetingChannel(newSession.sessionId, userId, { user });
 	},
 };

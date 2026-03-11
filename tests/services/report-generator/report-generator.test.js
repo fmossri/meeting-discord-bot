@@ -26,7 +26,7 @@ describe('generateReport', () => {
         expect(mockFs.writeFileSync).toHaveBeenCalled();
         const [path, content] = mockFs.writeFileSync.mock.calls[0];
         expect(path).toMatch(/meeting-report_test-ch-123_.+\.md$/);
-        expect(content).toContain('# Transcript for test-meeting-1 on test-ch-123');
+        expect(content).toContain('# Transcript for test-transcript-1 on test-ch-123');
         expect(content).toContain('## Participants: Alice, Bob');
         expect(content).toContain('Hello, this is a test segment.');
         expect(content).toContain('Hi Alice, I agree with that.');

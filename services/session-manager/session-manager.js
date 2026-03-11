@@ -1,4 +1,7 @@
 const { convertPCMToWav } = require('./convert-pcm-to-wav.js');
+const logger = require('../logger/logger');
+
+const COMPONENT = 'session-manager';
 
 function createSessionManager({
 	sessionStore,
@@ -120,7 +123,13 @@ function createSessionManager({
 			try {
 				await transcriptWorker.enqueueChunk(sessionId, chunk);
 			} catch (error) {
-				console.error('error sending chunk.', error);
+				logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
+					sessionId,
+					transcriptId: sessionId,
+					chunkId: chunk?.chunkId,
+					errorClass: error.constructor?.name || 'Error',
+					message: error.message,
+				});
 				continue;
 			}
 		}
@@ -194,9 +203,17 @@ function createSessionManager({
 			sessionStates.set(sessionId, sessionState);
             const meetingStartTimeMs = Date.now();
 			sessionState.transcriptPath = await transcriptWorker.startTranscript(sessionId, meetingStartTimeMs);
+			logger.info(COMPONENT, 'session_started', 'Session manager started', {
+				sessionId,
+				transcriptId: sessionId,
+			});
 			return true;
 		} catch (error) {
-			console.error('error starting session.', error);
+			logger.error(COMPONENT, 'session_start_failed', 'Failed to start session', {
+				sessionId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			return false;
 		}
 	}
@@ -223,9 +240,18 @@ function createSessionManager({
 			const summary = await summaryGenerator.generateSummary(reportPath);
 			await reportGenerator.insertSummary(reportPath, summary);
 			sessionStates.delete(sessionId);
-			console.log('session closed.');
+			logger.info(COMPONENT, 'session_closed', 'Session manager closed', {
+				sessionId,
+				transcriptId: sessionId,
+				reportPath,
+			});
 			return { reportPath, summary };
 		} catch (error) {
+			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
+				sessionId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw new Error(error.message);
 		}
 	}

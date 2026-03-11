@@ -1,6 +1,8 @@
 const wav = require('node-wav');
+const logger = require('../logger/logger');
 
 const WAV_SAMPLE_RATE = 16000;
+const COMPONENT = 'transcript-worker';
 const WAV_CHANNELS = 1;
 const MAX_RETRIES = 3;
 
@@ -11,8 +13,7 @@ function isValidWav(audioBuffer) {
 			return false;
 		}
 		return true;
-	} catch (error) {
-		console.error('Error decoding WAV buffer:', error);
+	} catch {
 		return false;
 	}
 }
@@ -31,7 +32,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		try {
 			await fsImpl.promises.writeFile(transcriptPath, JSON.stringify(header) + '\n', 'utf8');
 		} catch (error) {
-			console.error('Error writing transcript header:', error);
 			throw error;
 		}
 	}
@@ -61,9 +61,18 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					processingPromise: null,
 				},
 			});
+			logger.info(COMPONENT, 'transcript_started', 'Transcript started', {
+				transcriptId,
+				meetingStartIso: meetingStartTimeIso,
+				filePath: transcriptPath,
+			});
 			return transcriptPath;
 		} catch (error) {
-			console.error('Error starting transcript:', error);
+			logger.error(COMPONENT, 'transcript_start_failed', 'Failed to start transcript', {
+				transcriptId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw error;
 		}
 	}
@@ -103,11 +112,22 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			chunk.retryCount = 0;
 			transcript.chunksQueue.push(chunk);
 
+			logger.debug(COMPONENT, 'chunk_enqueued', 'Chunk enqueued', {
+				transcriptId,
+				chunkId: chunk.chunkId,
+				queueDepth: transcript.chunksQueue.length,
+			});
+
 			if (!transcript.transcriptState.processingPromise) {
 				ensureProcessing(transcriptId);
 			}
 		} catch (error) {
-			console.error('Error enqueuing chunk:', error);
+			logger.error(COMPONENT, 'chunk_enqueue_failed', 'Chunk validation or enqueue failed', {
+				transcriptId,
+				chunkId: chunk?.chunkId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw error;
 		}
 	}
@@ -137,7 +157,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			transcript.processedChunks = [];
 			transcript.transcriptState.processedSinceFlush = 0;
 		} catch (error) {
-			console.error('Error writing transcript file:', error);
+			logger.error(COMPONENT, 'flush_failed', 'Failed to write transcript segments to file', {
+				transcriptId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw error;
 		}
 	}
@@ -159,6 +183,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				const chunk = transcript.chunksQueue.shift();
 				transcript.chunksBucket.set(chunk.chunkId, chunk);
 				const audioBuffer = Buffer.from(chunk.audio).toString('base64');
+				const sttStartMs = Date.now();
 
 				const response = await fetchImpl(postUrl, {
 					method: 'POST',
@@ -174,14 +199,20 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				});
 
 				if (response.status !== 200) {
-					console.error('Failed to transcribe chunk. Retrying:', response.status, response.statusText);
 					chunk.retryCount++;
 					if (chunk.retryCount < MAX_RETRIES) {
 						transcript.chunksQueue.unshift(chunk);
 						transcript.chunksBucket.delete(chunk.chunkId);
 						break;
 					} else {
-						console.error('Failed to transcribe chunk after ' + MAX_RETRIES + ' retries');
+						logger.error(COMPONENT, 'stt_response_failed', 'STT failed after retries', {
+							transcriptId,
+							chunkId: chunk.chunkId,
+							statusCode: response.status,
+							retryCount: chunk.retryCount,
+							errorClass: 'STTNon200',
+							message: response.statusText || 'STT request failed',
+						});
 						transcript.chunksBucket.delete(chunk.chunkId);
 						transcript.failedChunks.push(chunk);
 						continue;
@@ -189,11 +220,22 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				}
 
 				const responseJson = await response.json();
+				const latencyMs = Date.now() - sttStartMs;
+				const segments = responseJson.segments || [];
+				const metrics = responseJson.metrics || {};
+				logger.info(COMPONENT, 'stt_response_ok', 'STT succeeded', {
+					transcriptId,
+					chunkId: chunk.chunkId,
+					latencyMs,
+					realTimeFactor: metrics.realTimeFactor ?? null,
+					segmentsCount: segments.length,
+				});
+
 				if (transcript.chunksBucket.has(responseJson.chunkId)) {
-					const chunk = transcript.chunksBucket.get(responseJson.chunkId);
-					chunk.segmentBuffer.push(...responseJson.segments);
-					chunk.audio = null;
-					transcript.processedChunks.push(chunk);
+					const bucketChunk = transcript.chunksBucket.get(responseJson.chunkId);
+					bucketChunk.segmentBuffer.push(...responseJson.segments);
+					bucketChunk.audio = null;
+					transcript.processedChunks.push(bucketChunk);
 					transcript.transcriptState.processedSinceFlush++;
 					transcript.chunksBucket.delete(responseJson.chunkId);
 				}
@@ -206,7 +248,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			}
 			transcript.inFlight = false;
 		} catch (error) {
-			console.error('Error processing next chunk:', error);
+			logger.error(COMPONENT, 'stt_response_failed', 'STT request failed', {
+				transcriptId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw error;
 		}
 	}
@@ -267,8 +313,18 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				if (err.code !== 'ENOENT') throw err;
 			}
 			transcriptsMap.delete(transcriptId);
+			logger.info(COMPONENT, 'transcript_closed', 'Transcript closed', {
+				transcriptId,
+				channelId: channelId ?? null,
+				filePath: transcriptPath,
+			});
 			return transcriptPath;
 		} catch (error) {
+			logger.error(COMPONENT, 'transcript_close_failed', 'Failed to close transcript', {
+				transcriptId,
+				errorClass: error.constructor?.name || 'Error',
+				message: error.message,
+			});
 			throw new Error(error.message);
 		}
 	}

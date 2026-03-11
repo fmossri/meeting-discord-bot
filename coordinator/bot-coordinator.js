@@ -3,6 +3,11 @@ const { ButtonBuilder, ButtonStyle, ActionRowBuilder, MessageFlags } = require('
 const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const { interactionErrorHelper } = require('../utils/interaction-errors.js');
 const timeoutDuration = require('../config/timeouts.js');
+const logger = require('../services/logger/logger');
+
+const COMPONENT = 'bot-coordinator';
+const LATE_JOINER_DM =
+	'A meeting with recording is in progress in this channel. To join as a participant, click **Accept** on the disclaimer message in the channel. To decline being recorded, click **Reject**.';
 
 function createBotCoordinator(sessionStore) {
     const confirmMsgToSession = new Map();
@@ -131,7 +136,11 @@ function createBotCoordinator(sessionStore) {
     async function registerParticipant(sessionId, participantId, interaction) {
         const sessionState = sessionStore.getSessionById(sessionId);
         if (!sessionState) {
-            console.error('session not found.', sessionId);
+            logger.error(COMPONENT, 'participant_accept_failed', 'Session not found for participant registration', {
+                sessionId,
+                participantId,
+                errorClass: 'SessionNotFound',
+            });
             await interaction.editReply({
                 content: 'An error occurred while registering you as a participant: session not found.',
                 flags: MessageFlags.Ephemeral,
@@ -141,11 +150,20 @@ function createBotCoordinator(sessionStore) {
         if (!sessionState.voiceConnection) {
             try {
                 if (!(await connectToChannel(sessionId))) {
-                    console.error('error connecting to channel.');
+                    logger.error(COMPONENT, 'participant_accept_failed', 'Failed to connect to voice channel', {
+                        sessionId,
+                        participantId,
+                        errorClass: 'ConnectFailed',
+                    });
                     return false;
                 }
             } catch (error) {
-                console.error('error connecting to channel.', error);
+                logger.error(COMPONENT, 'participant_accept_failed', 'Failed to connect to voice channel', {
+                    sessionId,
+                    participantId,
+                    errorClass: error.constructor?.name || 'Error',
+                    message: error.message,
+                });
                 throw error;
             }
         }
@@ -162,7 +180,14 @@ function createBotCoordinator(sessionStore) {
         }
         if (!sessionState.started) {
             const started = await interaction.client.sessionManager.startSession(sessionId);
-            if (!started) return false;
+            if (!started) {
+                logger.error(COMPONENT, 'participant_accept_failed', 'Failed to start session for participant', {
+                    sessionId,
+                    participantId,
+                    errorClass: 'StartSessionFailed',
+                });
+                return false;
+            }
             sessionState.started = true;
         }
         sessionState.participantIds.push(participantId);
@@ -179,13 +204,17 @@ function createBotCoordinator(sessionStore) {
         };
 
         sessionState.participantStates.set(participantId, participantState);
+        logger.info(COMPONENT, 'participant_accepted', 'Participant accepted disclaimer', {
+            sessionId,
+            participantId,
+        });
         if (!sessionState.paused) {
             subscribeToStream(sessionId, participantId);
             interaction.client.sessionManager.chunkStream(sessionId, participantId);
             await sessionState.originalInteraction.followUp({
                 content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript.`,
             });
-        } else {	
+        } else {
             await sessionState.originalInteraction.followUp({
                 content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript, but recording is paused.`,
             });
@@ -219,6 +248,10 @@ function createBotCoordinator(sessionStore) {
             }
             subscribeToStream(sessionId, participantId);
             sessionState.originalInteraction.client.sessionManager.chunkStream(sessionId, participantId);
+            logger.info(COMPONENT, 'participant_reconnected', 'Participant re-subscribed after reconnect', {
+                sessionId,
+                participantId,
+            });
             return true;
         }
         catch (error) {
@@ -289,12 +322,19 @@ function createBotCoordinator(sessionStore) {
             const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
             await sessionState.originalInteraction.editReply({ components: [disabledRow] });
 
+            logger.info(COMPONENT, 'session_closed', 'Meeting closed', {
+                sessionId,
+                autoClose,
+            });
             sessionStore.deleteSession(sessionId);
             return true;
         } catch (error) {
-            console.error('error closing session.', error);
+            logger.error(COMPONENT, 'session_close_failed', 'Close meeting failed', {
+                sessionId,
+                errorClass: error.constructor?.name || 'Error',
+                message: error.message,
+            });
             sessionStore.deleteSession(sessionId);
-            console.error('session deleted due to error.');
             return false;
         }
     }
@@ -409,6 +449,12 @@ function createBotCoordinator(sessionStore) {
 		}, timeoutDuration.uiTimeoutMs);
 		sessionState.timeouts.uiTimeoutId = uiTimeoutId;
 		sessionStore.createSession(sessionId, sessionState);
+		logger.info(COMPONENT, 'session_started', 'Meeting started', {
+			sessionId,
+			guildId: interaction.guild?.id ?? null,
+			channelId: voiceChannel?.id ?? null,
+			initiator: interaction.user?.id ?? null,
+		});
         return true;
     }
 
@@ -423,7 +469,10 @@ function createBotCoordinator(sessionStore) {
             sessionState.paused = true;
             const client = sessionState.originalInteraction.client;
             await client.sessionManager.pauseSession(sessionId);
-            
+            logger.info(COMPONENT, 'session_paused', 'Recording paused', {
+                sessionId,
+                reason: 'explicit',
+            });
             const pauseTimeoutId = setTimeout(async () => {
                 console.log('pause timeout expired.');
                 await executeClose(sessionId, true);
@@ -463,6 +512,7 @@ function createBotCoordinator(sessionStore) {
                 }
             }
             sessionState.paused = false;
+            logger.info(COMPONENT, 'session_resumed', 'Recording resumed', { sessionId });
             await sessionState.originalInteraction.followUp({
                 content: 'Meeting recording resumed.',
             });
@@ -471,6 +521,44 @@ function createBotCoordinator(sessionStore) {
         catch (error) {
             console.error('error resuming meeting.', error);
             throw error;
+        }
+    }
+
+    /**
+     * Handles a user joining the meeting voice channel: reconnect participant, reset pause timeout, or send late-joiner DM.
+     * Call only when the meeting has already started (caller checks newSession.sessionState.started).
+     */
+    async function handleUserJoinedMeetingChannel(sessionId, userId, { user }) {
+        const sessionState = sessionStore.getSessionById(sessionId);
+        if (!sessionState || !sessionState.started) return;
+
+        if (sessionState.rejectedIds.includes(userId)) return;
+
+        if (sessionState.participantIds.includes(userId)) {
+            if (!sessionState.paused) {
+                reconnectParticipant(sessionId, userId);
+            } else {
+                clearTimeout(sessionState.timeouts.pauseTimeoutId);
+                sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
+                    await executeClose(sessionId, true);
+                }, timeoutDuration.explicitPauseMs);
+            }
+            return;
+        }
+
+        if (!sessionState.dmIds.includes(userId)) {
+            if (user) {
+                try {
+                    await user.send(LATE_JOINER_DM);
+                    logger.info(COMPONENT, 'late_joiner_dm_sent', 'DM sent to late joiner', {
+                        sessionId,
+                        participantId: userId,
+                    });
+                } catch (err) {
+                    console.error('Could not DM late joiner:', err.message);
+                }
+            }
+            sessionState.dmIds.push(userId);
         }
     }
 
@@ -532,6 +620,7 @@ function createBotCoordinator(sessionStore) {
         resumeMeeting,
         reconnectParticipant,
         handleButtonInteraction,
+        handleUserJoinedMeetingChannel,
         autoCloseMeeting,
     };
 }
