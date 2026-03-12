@@ -1,3 +1,18 @@
+jest.mock('../../../services/logger/logger', () => ({
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+}));
+
+jest.mock('../../../services/metrics/metrics', () => ({
+    increment: jest.fn(),
+    incrementGauge: jest.fn(),
+    set: jest.fn(),
+    observe: jest.fn(),
+}));
+
+const logger = require('../../../services/logger/logger');
 const { createTranscriptWorker } = require('../../../services/transcript-worker/transcript-worker');
 const { createChunk } = require('../../helpers/test-utils');
 
@@ -212,6 +227,7 @@ describe('enqueueChunk', () => {
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await worker.closeTranscript('test-transcript');
+        // Retry is re-queued to the end and does not block the queue.
         expect(mockFetch).toHaveBeenCalledTimes(3);
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(
             expect.any(String),
@@ -265,6 +281,65 @@ describe('closeTranscript', () => {
         expect(mockFetch).toHaveBeenCalledTimes(6);
         // closeTranscript appends segment content (from tmp) to final transcript path; mock readFile returns '' so we only assert path
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(transcriptPath, expect.any(String));
+    });
+
+    it('closes with a partial transcript (segments + gaps) when some chunks fail permanently', async () => {
+        mockFetch.mockImplementation((url, options) => {
+            const body = JSON.parse(options.body);
+            if (body.chunkId === 2) {
+                return Promise.resolve({ status: 500, json: () => Promise.resolve({}) });
+            }
+            return Promise.resolve({
+                status: 200,
+                json: () => Promise.resolve({
+                    chunkId: body.chunkId,
+                    segments: [{ startMs: 0, endMs: 1000, text: `ok-${body.chunkId}` }],
+                }),
+            });
+        });
+
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
+        await new Promise((r) => setImmediate(r));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
+        await new Promise((r) => setImmediate(r));
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
+
+        const transcriptPath = await worker.closeTranscript('test-transcript', {
+            channelId: 'ch-123',
+            participantDisplayNames: ['Alice'],
+        });
+
+        expect(transcriptPath).toBeDefined();
+
+        const tmpCalls = mockFs.promises.appendFile.mock.calls.filter((c) => String(c[0]).endsWith('.tmp'));
+        const combined = tmpCalls.map((c) => c[1]).join('');
+        const lines = combined.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+        expect(lines.some((l) => l.type === 'gap' && l.chunkId === 2)).toBe(true);
+        expect(lines.some((l) => l.text === 'ok-1')).toBe(true);
+        expect(lines.some((l) => l.text === 'ok-3')).toBe(true);
+
+        // Logged clearly: warn includes chunkId list
+        const warnCalls = logger.warn.mock.calls.filter((c) => c[1] === 'transcript_closed');
+        expect(warnCalls.length).toBeGreaterThan(0);
+        const warnContext = warnCalls[warnCalls.length - 1][3];
+        expect(warnContext.failedChunkStartTimes).toContain('chunkId 2');
+    });
+
+    it('writes explicit gap markers when a chunk still fails after close retry', async () => {
+        mockFetch.mockImplementation(() => Promise.resolve({ status: 500, json: () => Promise.resolve({}) }));
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
+        await worker.closeTranscript('test-transcript');
+
+        const tmpCalls = mockFs.promises.appendFile.mock.calls.filter((c) => String(c[0]).endsWith('.tmp'));
+        const combined = tmpCalls.map((c) => c[1]).join('');
+        const lines = combined.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        const gapLine = lines.find((l) => l.type === 'gap' && l.chunkId === 1);
+        expect(gapLine).toBeDefined();
+        expect(gapLine.displayName).toBeDefined();
+        expect(gapLine.text).toContain('Missing transcript for chunk 1');
     });
 
     it('waits for queued chunks to be transcribed and flushed before returning', async () => {

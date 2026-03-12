@@ -6,6 +6,7 @@ const WAV_SAMPLE_RATE = 16000;
 const COMPONENT = 'transcript-worker';
 const WAV_CHANNELS = 1;
 const MAX_RETRIES = 3;
+const FLUSH_AFTER_PROCESSED_CHUNKS = 5;
 
 function isValidWav(audioBuffer) {
 	try {
@@ -28,13 +29,14 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		return sum;
 	}
 
-	async function writeTranscriptHeader(transcriptPath, { transcriptId, channelId, meetingStartIso, participantDisplayNames }) {
+	async function writeTranscriptHeader(transcriptPath, { transcriptId, channelId, meetingStartIso, participantDisplayNames, closure }) {
 		const header = {
 			type: 'metadata',
 			transcriptId,
 			channelId: channelId ?? null,
 			meetingStartIso,
 			participantDisplayNames: Array.isArray(participantDisplayNames) ? participantDisplayNames : [],
+			closure: closure && typeof closure === 'object' ? closure : null,
 		};
 		try {
 			await fsImpl.promises.writeFile(transcriptPath, JSON.stringify(header) + '\n', 'utf8');
@@ -152,6 +154,11 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			: null;
 	}
 
+	function formatGapText({ chunkId, retryCount, reason }) {
+		const reasonText = reason ? ` (${reason})` : '';
+		return `**Missing transcript for chunk ${chunkId} after ${retryCount} attempts${reasonText}.**`;
+	}
+
 	async function appendToTemp(transcriptId) {
 		if (!transcriptsMap.has(transcriptId)) {
 			throw new Error('Invariant: transcript not found in appendToTemp');
@@ -164,6 +171,24 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 
 		const lines = [];
 		for (const chunk of sortedChunks) {
+			if (chunk.type === 'gap') {
+				const JSONLine = {
+					type: 'gap',
+					transcriptId: transcriptId,
+					chunkId: chunk.chunkId,
+					participantId: null,
+					displayName: chunk.displayName,
+					clockTimeMs: typeof chunk.clockTimeMs === 'number' ? chunk.clockTimeMs : null,
+					startMs: null,
+					endMs: null,
+					text: chunk.text,
+					retryCount: typeof chunk.retryCount === 'number' ? chunk.retryCount : null,
+					reason: chunk.reason ?? null,
+				};
+				lines.push(JSON.stringify(JSONLine) + '\n');
+				continue;
+			}
+
 			// Within a chunk: if we can compute clockTimeMs for all segments, order by it; else leave internal order intact.
 			const hasTimestamp = chunk.chunkClockTimeMs != null && typeof chunk.chunkStartTimeMs === 'number';
 			const segments = hasTimestamp
@@ -205,6 +230,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 
 	function recordChunkFailure(transcriptId, transcript, chunk, logContext) {
 		transcript.chunksBucket.delete(chunk.chunkId);
+		chunk.lastErrorClass = logContext?.errorClass ?? null;
+		chunk.lastErrorMessage = logContext?.message ?? null;
 		appMetrics.increment('chunks_failed_total');
 		logger.error(COMPONENT, 'stt_response_failed', 'STT failed after retries', {
 			transcriptId,
@@ -215,8 +242,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	async function processNextChunk(transcriptId) {
-		let inSttAttempt = false;
-		let countedCall = false;
 		try {
 			if (!transcriptsMap.has(transcriptId)) {
 				throw new Error('Invariant: transcript not found in processNextChunk');
@@ -230,38 +255,40 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			const postUrl = sttBaseUrl + '/transcribe';
 
 			while (transcript.chunksQueue.length > 0) {
-				inSttAttempt = true;
-				countedCall = false;
 				const chunk = transcript.chunksQueue.shift();
 				appMetrics.set('worker_queue_depth', getTotalQueueDepth());
 				transcript.chunksBucket.set(chunk.chunkId, chunk);
 				const queueWaitMs = chunk.receivedAtMs != null ? Date.now() - chunk.receivedAtMs : null;
 				const audioBuffer = Buffer.from(chunk.audio).toString('base64');
 				const sttStartMs = Date.now();
+				let countedCall = false;
 
-				const response = await fetchImpl(postUrl, {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-					},
-					body: JSON.stringify({
-						transcriptId: transcriptId,
-						chunkId: chunk.chunkId,
-						chunkStartTimeMs: chunk.chunkStartTimeMs,
-						audio: audioBuffer,
-					}),
-				});
+				try {
+					const response = await fetchImpl(postUrl, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({
+							transcriptId: transcriptId,
+							chunkId: chunk.chunkId,
+							chunkStartTimeMs: chunk.chunkStartTimeMs,
+							audio: audioBuffer,
+						}),
+					});
 
-				appMetrics.increment('stt_calls_total');
-				countedCall = true;
+					appMetrics.increment('stt_calls_total');
+					countedCall = true;
 
-				if (response.status !== 200) {
-					chunk.retryCount++;
-					if (chunk.retryCount < MAX_RETRIES) {
-						transcript.chunksQueue.unshift(chunk);
-						transcript.chunksBucket.delete(chunk.chunkId);
-						break;
-					} else {
+					if (response.status !== 200) {
+						chunk.retryCount++;
+						if (chunk.retryCount < MAX_RETRIES) {
+							// Retry later: requeue to the end so we don't block other chunks.
+							transcript.chunksQueue.push(chunk);
+							transcript.chunksBucket.delete(chunk.chunkId);
+							continue;
+						}
+
 						appMetrics.increment('stt_errors_total');
 						appMetrics.observe('stt_latency_ms', Date.now() - sttStartMs);
 						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
@@ -274,33 +301,51 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						});
 						continue;
 					}
-				}
 
-				const responseJson = await response.json();
-				const latencyMs = Date.now() - sttStartMs;
-				appMetrics.observe('stt_latency_ms', latencyMs);
-				if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
-				const segments = responseJson.segments || [];
-				const responseMetrics = responseJson.metrics || {};
-				logger.info(COMPONENT, 'stt_response_ok', 'STT succeeded', {
-					transcriptId,
-					chunkId: chunk.chunkId,
-					latencyMs,
-					queueWaitMs,
-					realTimeFactor: responseMetrics.realTimeFactor ?? null,
-					segmentsCount: segments.length,
-				});
+					const responseJson = await response.json();
+					const latencyMs = Date.now() - sttStartMs;
+					appMetrics.observe('stt_latency_ms', latencyMs);
+					if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
+					const segments = responseJson.segments || [];
+					const responseMetrics = responseJson.metrics || {};
+					logger.info(COMPONENT, 'stt_response_ok', 'STT succeeded', {
+						transcriptId,
+						chunkId: chunk.chunkId,
+						latencyMs,
+						queueWaitMs,
+						realTimeFactor: responseMetrics.realTimeFactor ?? null,
+						segmentsCount: segments.length,
+					});
 
-				if (transcript.chunksBucket.has(responseJson.chunkId)) {
-					const bucketChunk = transcript.chunksBucket.get(responseJson.chunkId);
-					bucketChunk.segmentBuffer.push(...responseJson.segments);
-					bucketChunk.audio = null;
-					transcript.processedChunks.push(bucketChunk);
-					transcript.transcriptState.processedSinceFlush++;
-					transcript.chunksBucket.delete(responseJson.chunkId);
-				}
-				if (transcript.transcriptState.processedSinceFlush >= 5) {
-					await appendToTemp(transcriptId);
+					if (transcript.chunksBucket.has(responseJson.chunkId)) {
+						const bucketChunk = transcript.chunksBucket.get(responseJson.chunkId);
+						bucketChunk.segmentBuffer.push(...responseJson.segments);
+						bucketChunk.audio = null;
+						transcript.processedChunks.push(bucketChunk);
+						transcript.transcriptState.processedSinceFlush++;
+						transcript.chunksBucket.delete(responseJson.chunkId);
+					}
+					if (transcript.transcriptState.processedSinceFlush >= FLUSH_AFTER_PROCESSED_CHUNKS) {
+						await appendToTemp(transcriptId);
+					}
+				} catch (error) {
+					if (!countedCall) appMetrics.increment('stt_calls_total');
+					appMetrics.increment('stt_errors_total');
+					transcript.chunksBucket.delete(chunk.chunkId);
+
+					chunk.retryCount = (chunk.retryCount || 0) + 1;
+					if (chunk.retryCount < MAX_RETRIES) {
+						// Retry later: requeue to the end so we don't block other chunks.
+						transcript.chunksQueue.push(chunk);
+						continue;
+					}
+
+					recordChunkFailure(transcriptId, transcript, chunk, {
+						retryCount: chunk.retryCount,
+						errorClass: error.constructor?.name || 'Error',
+						message: error.message,
+					});
+					continue;
 				}
 			}
 			if (transcript.processedChunks.length > 0) {
@@ -308,33 +353,12 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			}
 			transcript.inFlight = false;
 		} catch (error) {
-			if (inSttAttempt && !countedCall) {
-				appMetrics.increment('stt_calls_total');
-			}
-			appMetrics.increment('stt_errors_total');
-			const transcript = transcriptsMap.get(transcriptId);
-			const currentChunk = transcript?.chunksBucket?.size > 0 ? Array.from(transcript.chunksBucket.values())[0] : null;
-			if (!transcript || !currentChunk) {
-				throw error;
-			}
-			transcript.chunksBucket.delete(currentChunk.chunkId);
-			currentChunk.retryCount = (currentChunk.retryCount || 0) + 1;
-			if (currentChunk.retryCount < MAX_RETRIES) {
-				transcript.chunksQueue.unshift(currentChunk);
-				transcript.inFlight = false;
-				return;
-			}
-			recordChunkFailure(transcriptId, transcript, currentChunk, {
-				retryCount: currentChunk.retryCount,
-				errorClass: error.constructor?.name || 'Error',
-				message: error.message,
-			});
 			transcript.inFlight = false;
-			return;
+			throw error;
 		}
 	}
 
-	async function closeTranscript(transcriptId, { channelId, participantDisplayNames } = {}) {
+	async function closeTranscript(transcriptId, { channelId, participantDisplayNames, closure } = {}) {
         try {
             if (!transcriptsMap.has(transcriptId)) {
                 throw new Error('Transcript not found');
@@ -371,12 +395,35 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					await appendToTemp(transcriptId);
 				}
 				if (transcript.failedChunks.length > 0) {
-					const failedChunkStartTimes = transcript.failedChunks.map((chunk, i) => `chunk ${i}: ${chunk.chunkStartTimeMs}ms`).join(', ');
+					const failedChunkStartTimes = transcript.failedChunks.map((chunk) => `chunkId ${chunk.chunkId}: ${chunk.chunkStartTimeMs}ms`).join(', ');
 					logger.warn(COMPONENT, 'transcript_closed', 'Transcript closed with failed chunks; some segments missing', {
 						transcriptId,
 						failedChunkCount: transcript.failedChunks.length,
 						failedChunkStartTimes,
 					});
+
+					// Persist explicit gap markers in the transcript timeline.
+					for (const failedChunk of transcript.failedChunks) {
+						const clockTimeMs =
+							typeof failedChunk.chunkClockTimeMs === 'number'
+								? failedChunk.chunkClockTimeMs
+								: null;
+						transcript.processedChunks.push({
+							type: 'gap',
+							chunkId: failedChunk.chunkId,
+							displayName: failedChunk.displayName ?? 'System',
+							clockTimeMs,
+							retryCount: failedChunk.retryCount ?? null,
+							reason: failedChunk.lastErrorClass ?? null,
+							text: formatGapText({
+								chunkId: failedChunk.chunkId,
+								retryCount: failedChunk.retryCount ?? MAX_RETRIES,
+								reason: failedChunk.lastErrorClass ?? null,
+							}),
+						});
+					}
+					await appendToTemp(transcriptId);
+					transcript.failedChunks = [];
 				}
 			}
 			const transcriptPath = transcript.transcriptState.filePath;
@@ -386,6 +433,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				channelId: channelId,
 				meetingStartIso: transcript.meetingStartIso,
 				participantDisplayNames: participantDisplayNames,
+				closure,
 			});
 			try {
 				const segmentContent = await fsImpl.promises.readFile(tmpPath, 'utf8');
