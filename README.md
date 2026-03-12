@@ -29,7 +29,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Observability (logs + in-process metrics)
 
-- Structured JSON logs emitted to stdout via `services/logger/logger.js`. Set `LOG_LEVEL` to control verbosity (`debug` | `info` | `warn` | `error`; default `info`).
+- Structured JSON logs emitted to stdout via `services/logger/logger.js`. Set `LOG_LEVEL` to control verbosity (`debug` | `info` | `warn` | `error` | `silent`; default `info`). Use `silent` to disable all log output (e.g. in tests).
 - Minimal in-process metrics via `services/metrics/metrics.js` (counters, gauges, histograms) updated alongside log calls. Includes:
   - `worker_queue_depth` (gauge)
   - `stt_latency_ms` (histogram)
@@ -46,12 +46,13 @@ A Discord bot that implements STT and summarization capabilities.
   - Controlled by env vars like `LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `LLM_TEMPERATURE`.
   - Supports optional truncation for long meetings with `LLM_TRUNCATION_ENABLED`, `LLM_TRUNCATION_MAX_CHARS`, and a simple chunk‑and‑combine strategy.
 - The `/close` command posts a short Markdown summary back to Discord; the full Markdown report stays on disk for inspection.
+- Report generation requires the transcript to contain at least one segment; summary generation requires the LLM to return non-empty content. If either step fails, the user sees an error on confirm and the failure is logged with a distinct category (report vs summary).
 
 ---
 
 ## Flow
 
-After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the coordinator posts the summary to Discord. If everyone leaves without closing, the bot auto-closes after a timeout (see `config/timeouts.js`).
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the coordinator posts it to Discord. If everyone leaves without closing, the bot auto-closes after a timeout (see `config/timeouts.js`).
 
 **Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
 
@@ -93,7 +94,7 @@ After participants accept a disclaimer, the bot joins the voice channel and subs
    ```
    The default `requirements.txt` includes CUDA-related pip packages (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`). For **CPU-only** (e.g. no NVIDIA GPU), remove those two lines from `requirements.txt` before installing them.
 
-   **GPU (CUDA):** The STT app and scripts import `stt-wrapper/cuda_env.py` first, which sets `LD_LIBRARY_PATH` if the libs aren’t already findable. That aims to fix a bug where whisper couldn't find cuda libraries in venv.
+   **GPU (CUDA):** The STT app and scripts import `stt-wrapper/cuda_env.py` first, which locates the venv’s CUDA libraries (e.g. `libcublas.so.12`, `libcudnn.so`) under `site-packages/nvidia/.../lib` and prepends them to `LD_LIBRARY_PATH` if they are not already there. This works around an issue where the dynamic linker could not find these CUDA libs when the venv was activated, causing faster-whisper/CTranslate2 to fail to load CUDA even though the packages were installed.
 
 5. **LLM (summaries)**
    Tsummix uses an LLM to generate meeting summaries. It's built to be **LLM-agnostic** (local models via Ollama or Hugging Face, or inference APIs like Gemini, GPT, DeepSeek, via env and credentials); **currently it only supports local models through [Ollama](https://ollama.com/download)**. Install Ollama for your OS, ensure the service is running (on many installs it runs automatically), then pull your preferred model:
@@ -149,7 +150,7 @@ Copy `.env-example` to `.env` and set:
    ```
    To run from the shell without `npm` or `node`, link once: `npm link`. Then run `tsummix run`, `tsummix run bot`, or `tsummix run stt`.
 
-**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=error` to keep output readable; override with `LOG_LEVEL=info npm test` when debugging.
+**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=silent` so no JSON log lines are printed; override with `LOG_LEVEL=info npm test` when debugging.
 
 **STT wrapper**
 
@@ -212,7 +213,7 @@ Copy `.env-example` to `.env` and set:
 | `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
-| `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=error` for test runs |
+| `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |
 

@@ -143,11 +143,14 @@ describe('enqueueChunk', () => {
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2, participantData: { participantId: 'u2', displayName: 'Bob' } }));
         await worker.closeTranscript('test-transcript');
         expect(mockFetch).toHaveBeenCalledTimes(2);
-        // appendFile: 2 segment lines to tmp, then 1 merge (tmp content → transcript) in closeTranscript
+        // appendToTemp writes one appendFile per flush with all segment lines combined
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter(c => c[0].endsWith('.tmp'));
-        expect(segmentCalls.length).toBe(2);
-        expect(JSON.parse(segmentCalls[0][1])).toMatchObject({ chunkId: 1, participantId: 'u1', displayName: 'Alice' });
-        expect(JSON.parse(segmentCalls[1][1])).toMatchObject({ chunkId: 2, participantId: 'u2', displayName: 'Bob' });
+        expect(segmentCalls.length).toBe(1);
+        const content = segmentCalls[0][1];
+        const lines = content.split('\n').filter(Boolean);
+        expect(lines.length).toBe(2);
+        expect(JSON.parse(lines[0])).toMatchObject({ chunkId: 1, participantId: 'u1', displayName: 'Alice' });
+        expect(JSON.parse(lines[1])).toMatchObject({ chunkId: 2, participantId: 'u2', displayName: 'Bob' });
     });
 
     it('writes clockTimeMs when chunk has chunkClockTimeMs', async () => {
@@ -170,7 +173,9 @@ describe('enqueueChunk', () => {
         await worker.closeTranscript('test-transcript');
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
         expect(segmentCalls.length).toBeGreaterThan(0);
-        const segmentLine = JSON.parse(segmentCalls[0][1]);
+        const content = segmentCalls[0][1];
+        const firstLine = content.split('\n').filter(Boolean)[0];
+        const segmentLine = JSON.parse(firstLine);
         expect(segmentLine.clockTimeMs).toBe(10500);
     });
 
@@ -180,7 +185,9 @@ describe('enqueueChunk', () => {
         await worker.closeTranscript('test-transcript');
         const segmentCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0].endsWith('.tmp'));
         expect(segmentCalls.length).toBeGreaterThan(0);
-        const segmentLine = JSON.parse(segmentCalls[0][1]);
+        const content = segmentCalls[0][1];
+        const firstLine = content.split('\n').filter(Boolean)[0];
+        const segmentLine = JSON.parse(firstLine);
         expect(segmentLine.clockTimeMs).toBeNull();
     });
 

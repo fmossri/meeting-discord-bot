@@ -146,28 +146,48 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 	}
 
+	function getSegmentClockTimeMs(chunk, segment) {
+		return chunk.chunkClockTimeMs != null && typeof chunk.chunkStartTimeMs === 'number'
+			? chunk.chunkClockTimeMs + (segment.startMs - chunk.chunkStartTimeMs)
+			: null;
+	}
+
 	async function appendToTemp(transcriptId) {
 		if (!transcriptsMap.has(transcriptId)) {
 			throw new Error('Invariant: transcript not found in appendToTemp');
 		}
 		const transcript = transcriptsMap.get(transcriptId);
-		try {
-			const tempPath = transcript.transcriptState.tmpPath;
-			for (const chunk of transcript.processedChunks) {
-				for (const segment of chunk.segmentBuffer) {
-					const JSONLine = {
-						transcriptId: transcriptId,
-						chunkId: chunk.chunkId,
-						participantId: chunk.participantId,
-						displayName: chunk.displayName,
-                        clockTimeMs: chunk.chunkClockTimeMs != null ?chunk.chunkClockTimeMs + (segment.startMs - chunk.chunkStartTimeMs) : null,
-						startMs: segment.startMs,
-						endMs: segment.endMs,
-						text: segment.text,
-					};
-					await fsImpl.promises.appendFile(tempPath, JSON.stringify(JSONLine) + '\n');
-				}
+		if (transcript.processedChunks.length === 0) return;
+
+		// Order by chunkId so late-arriving chunks are placed between n-1 and n+1.
+		const sortedChunks = [...transcript.processedChunks].sort((a, b) => a.chunkId - b.chunkId);
+
+		const lines = [];
+		for (const chunk of sortedChunks) {
+			// Within a chunk: if we can compute clockTimeMs for all segments, order by it; else leave internal order intact.
+			const hasTimestamp = chunk.chunkClockTimeMs != null && typeof chunk.chunkStartTimeMs === 'number';
+			const segments = hasTimestamp
+				? [...chunk.segmentBuffer].sort((s1, s2) => getSegmentClockTimeMs(chunk, s1) - getSegmentClockTimeMs(chunk, s2))
+				: chunk.segmentBuffer;
+
+			for (const segment of segments) {
+				const JSONLine = {
+					transcriptId: transcriptId,
+					chunkId: chunk.chunkId,
+					participantId: chunk.participantId,
+					displayName: chunk.displayName,
+					clockTimeMs: getSegmentClockTimeMs(chunk, segment),
+					startMs: segment.startMs,
+					endMs: segment.endMs,
+					text: segment.text,
+				};
+				lines.push(JSON.stringify(JSONLine) + '\n');
 			}
+		}
+		const content = lines.join('');
+
+		try {
+			await fsImpl.promises.appendFile(transcript.transcriptState.tmpPath, content);
 			transcript.processedChunks = [];
 			transcript.transcriptState.processedSinceFlush = 0;
 		} catch (error) {
@@ -178,7 +198,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
-			throw error;
+			// Do not throw: keep processedChunks for next flush attempt (opportunistic retry).
+			// Meeting capture and STT processing continue; next successful batch will retry this backlog.
 		}
 	}
 
