@@ -42,6 +42,7 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
     async function generateReport(transcriptPath) {
         try {
             let report = [];
+            let segmentCount = 0;
             const textStream = fsImpl.createReadStream(transcriptPath);
             const rl = readline.createInterface({input: textStream, crlfDelay: Infinity});
         let ifFirstLine = true;
@@ -98,6 +99,7 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
             if (!JSONLine.text?.trim()) {
                 continue;
             }
+            segmentCount++;
             const timestampMs = typeof JSONLine.clockTimeMs === 'number'
                 ? JSONLine.clockTimeMs
                 : null;
@@ -122,6 +124,9 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
             formatReportLine(stringsToFormat, columnWidths, report);
         }
 
+        if (segmentCount < 1) {
+            throw new Error('Transcript has no segments; cannot generate report.');
+        }
         report.push('```');
         fsImpl.writeFileSync(reportPath, report.join('\n'), 'utf8');
         return reportPath;

@@ -283,7 +283,7 @@ function createSessionManager({
 			await ensureProcessing(sessionId);
             flushQueues(sessionId);
 
-            stage = 'transcript';
+			stage = 'transcript';
 			await transcriptWorker.closeTranscript(sessionId, {
 				channelId: sessionState.voiceChannelId,
 				participantDisplayNames: displayNames,
@@ -307,11 +307,16 @@ function createSessionManager({
 			return { reportPath, summary };
 		} catch (error) {
 			appMetrics.increment('session_close_failures_total');
+			const errorClass = stage === 'report'
+				? 'ReportGenerationFailed'
+				: stage === 'summary'
+					? 'SummaryGenerationFailed'
+					: 'CloseSessionFailed';
 			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
 				sessionId,
-				errorClass: 'CloseSessionFailed',
+				errorClass,
 				innerErrorClass: error.constructor?.name || 'Error',
-                stage,
+				stage,
 				message: error.message,
 			});
 			throw error;

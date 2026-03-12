@@ -150,6 +150,25 @@ describe('Session Manager', () => {
 
 			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('close failed');
 		});
+
+		it('throws when reportGenerator.generateReport throws (e.g. empty transcript)', async () => {
+			const session = createSessionWithParticipantStates(new Map([['u1', { displayName: 'Alice' }]]));
+			const sessionStore = createMockSessionStore(session);
+			const transcriptWorker = createMockTranscriptWorker();
+			const sessionManager = createSessionManager({
+				sessionStore,
+				createReportGenerator: () => ({
+					generateReport: jest.fn().mockRejectedValue(new Error('Transcript has no segments; cannot generate report.')),
+					insertSummary: jest.fn().mockResolvedValue(undefined),
+				}),
+				createSummaryGenerator: () => createMockSummaryGenerator(),
+				transcriptWorker,
+			});
+
+			await sessionManager.startSession('session-1');
+
+			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('Transcript has no segments');
+		});
 	});
 
 	describe('chunkStream', () => {

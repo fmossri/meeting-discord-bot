@@ -137,12 +137,20 @@ async function generateSummary(reportPath, options = {}) {
         }
     };
 
+    function validateSummary(summary) {
+        if (typeof summary !== 'string' || summary.trim().length === 0) {
+            throw new Error('Summary generation produced empty output');
+        }
+        return summary;
+    }
+
     if (!shouldTruncate) {
         const system = process.env.LLM_SYSTEM_PROMPT
             ? process.env.LLM_SYSTEM_PROMPT
             : buildSystemPromptDefault();
         const user = buildUserPromptDefault(report);
-        return await callLLM(system, user);
+        const summary = await callLLM(system, user);
+        return validateSummary(summary);
     }
 
     const chunks = splitIntoChunks(report, maxChars, strategy);
@@ -155,7 +163,8 @@ async function generateSummary(reportPath, options = {}) {
 
     const system = buildSystemPromptCombine();
     const user = buildUserPromptCombine(chunkSummaries);
-    return await callLLM(system, user);
+    const summary = await callLLM(system, user);
+    return validateSummary(summary);
 }
 
     return { generateSummary };

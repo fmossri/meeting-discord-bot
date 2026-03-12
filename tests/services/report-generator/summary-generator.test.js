@@ -82,4 +82,12 @@ describe('generateSummary', () => {
         expect(summary).toBe(finalSummary);
         expect(mockComplete.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
+
+    it('throws when adapter returns empty or whitespace-only summary', async () => {
+        mockComplete.mockResolvedValue('');
+        await expect(generator.generateSummary('any-path')).rejects.toThrow('Summary generation produced empty output');
+
+        mockComplete.mockResolvedValue('   \n\t  ');
+        await expect(generator.generateSummary('any-path')).rejects.toThrow('Summary generation produced empty output');
+    });
 });

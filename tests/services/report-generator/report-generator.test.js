@@ -58,6 +58,15 @@ describe('generateReport', () => {
         expect(mockFs.writeFileSync).not.toHaveBeenCalled();
     });
 
+    it('throws when transcript has no segments (header-only)', async () => {
+        const headerOnlyContent = createMinimalTranscriptContent({ segments: [] });
+        mockFs.createReadStream.mockReturnValue(createReadStreamFromString(headerOnlyContent));
+        await expect(generator.generateReport('any-path')).rejects.toThrow(
+            'Transcript has no segments; cannot generate report.'
+        );
+        expect(mockFs.writeFileSync).not.toHaveBeenCalled();
+    });
+
     it('skips segment lines with empty text', async () => {
         const transcriptContent = createMinimalTranscriptContent({
             metadata: { type: 'metadata', transcriptId: 'm1', channelId: 'ch1', meetingStartIso: '2025-01-15T14:30:00.000Z', participantDisplayNames: ['Alice'] },
