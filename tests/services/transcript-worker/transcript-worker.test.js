@@ -227,7 +227,7 @@ describe('enqueueChunk', () => {
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await worker.closeTranscript('test-transcript');
-        // Retry is re-queued to the end and does not block the queue.
+        // Two chunks: first fails then succeeds on retry, second succeeds; expect 3 total STT calls.
         expect(mockFetch).toHaveBeenCalledTimes(3);
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(
             expect.any(String),
@@ -278,9 +278,30 @@ describe('closeTranscript', () => {
         await new Promise(r => setImmediate(r));
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 3 }));
         const transcriptPath = await worker.closeTranscript('test-transcript');
+        // Three chunks, each failing twice then succeeding: 6 total STT calls.
         expect(mockFetch).toHaveBeenCalledTimes(6);
         // closeTranscript appends segment content (from tmp) to final transcript path; mock readFile returns '' so we only assert path
         expect(mockFs.promises.appendFile).toHaveBeenCalledWith(transcriptPath, expect.any(String));
+    });
+
+    it('treats AbortError as timeout and eventually moves chunk to failedChunks', async () => {
+        // Simulate AbortError from fetchWithTimeout; decorator sets isSttTimeout=true.
+        const abortError = new Error('timeout');
+        abortError.name = 'AbortError';
+        mockFetch.mockRejectedValue(abortError);
+
+        await worker.startTranscript('test-transcript');
+        await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 1 }));
+
+        await expect(worker.closeTranscript('test-transcript')).resolves.toBeDefined();
+
+        // After retries exhausted, we should have logged stt_response_failed with SttTimeout.
+        const errorCalls = logger.error.mock.calls.filter(
+            (c) => c[1] === 'stt_response_failed'
+        );
+        expect(errorCalls.length).toBeGreaterThan(0);
+        const lastContext = errorCalls[errorCalls.length - 1][3];
+        expect(lastContext.errorClass).toBe('SttTimeout');
     });
 
     it('closes with a partial transcript (segments + gaps) when some chunks fail permanently', async () => {

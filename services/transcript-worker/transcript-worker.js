@@ -1,6 +1,7 @@
 const wav = require('node-wav');
 const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
+const { sttTimeoutMs } = require('../../config/timeouts.js');
 
 const WAV_SAMPLE_RATE = 16000;
 const COMPONENT = 'transcript-worker';
@@ -241,6 +242,25 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		transcript.failedChunks.push(chunk);
 	}
 
+	function fetchWithTimeout(url, options, timeoutMs) {
+		const controller = new AbortController();
+		const id = setTimeout(() => controller.abort(), timeoutMs);
+
+		return fetchImpl(url, {
+			...options,
+			signal: controller.signal,
+		})
+			.catch((error) => {
+				if (error.name === 'AbortError' || error.constructor?.name === 'AbortError') {
+					error.isSttTimeout = true;
+				}
+				throw error;
+			})
+			.finally(() => {
+				clearTimeout(id);
+			});
+	}
+
 	async function processNextChunk(transcriptId) {
 		try {
 			if (!transcriptsMap.has(transcriptId)) {
@@ -264,7 +284,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				let countedCall = false;
 
 				try {
-					const response = await fetchImpl(postUrl, {
+					const response = await fetchWithTimeout(postUrl, {
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json',
@@ -275,7 +295,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 							chunkStartTimeMs: chunk.chunkStartTimeMs,
 							audio: audioBuffer,
 						}),
-					});
+					}, sttTimeoutMs);
 
 					appMetrics.increment('stt_calls_total');
 					countedCall = true;
@@ -339,10 +359,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 						transcript.chunksQueue.push(chunk);
 						continue;
 					}
-
+					const isTimeout = error?.isSttTimeout === true;
 					recordChunkFailure(transcriptId, transcript, chunk, {
 						retryCount: chunk.retryCount,
-						errorClass: error.constructor?.name || 'Error',
+						errorClass: isTimeout ? 'SttTimeout' : (error.constructor?.name || 'Error'),
 						message: error.message,
 					});
 					continue;

@@ -2,7 +2,7 @@ const prism = require('prism-media');
 const { ButtonBuilder, ButtonStyle, ActionRowBuilder, MessageFlags } = require('discord.js');
 const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const { interactionErrorHelper } = require('../utils/interaction-errors.js');
-const timeoutDuration = require('../config/timeouts.js');
+const { meetingTimeouts } = require('../config/timeouts.js');
 const logger = require('../services/logger/logger');
 const appMetrics = require('../services/metrics/metrics');
 
@@ -152,7 +152,7 @@ function createBotCoordinator(sessionStore) {
             sessionState.timeouts.pauseTimeoutId = null;
             sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
                 await executeClose(sessionId, true);
-            }, timeoutDuration.explicitPauseMs);
+            }, meetingTimeouts.explicitPauseMs);
         }
         if (!sessionState.started) {
             const started = await interaction.client.sessionManager.startSession(sessionId);
@@ -222,7 +222,7 @@ function createBotCoordinator(sessionStore) {
             sessionState.timeouts.pauseTimeoutId = null;
             sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
                 await executeClose(sessionId, true);
-            }, timeoutDuration.explicitPauseMs);
+            }, meetingTimeouts.explicitPauseMs);
             return;
         }
         try {
@@ -437,7 +437,7 @@ function createBotCoordinator(sessionStore) {
                 logger.info(COMPONENT, 'session_closed', 'Session timed out and deleted', {
                     sessionId,
                 });
-            }, timeoutDuration.uiTimeoutMs);
+            }, meetingTimeouts.uiTimeoutMs);
 
             sessionState.timeouts.uiTimeoutId = uiTimeoutId;
             sessionStore.createSession(sessionId, sessionState);
@@ -480,7 +480,7 @@ function createBotCoordinator(sessionStore) {
             });
             const pauseTimeoutId = setTimeout(async () => {
                 await executeClose(sessionId, true);
-            }, timeoutDuration.explicitPauseMs);
+            }, meetingTimeouts.explicitPauseMs);
             sessionState.timeouts.pauseTimeoutId = pauseTimeoutId;
         } catch (error) {
             logger.error(COMPONENT, 'session_pause_failed', 'Error pausing meeting', {
@@ -575,7 +575,7 @@ function createBotCoordinator(sessionStore) {
                 clearTimeout(sessionState.timeouts.pauseTimeoutId);
                 sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
                     await executeClose(sessionId, true);
-                }, timeoutDuration.explicitPauseMs);
+                }, meetingTimeouts.explicitPauseMs);
             }
             return;
         }
@@ -634,7 +634,7 @@ function createBotCoordinator(sessionStore) {
                 });
             }
             confirmMsgToSession.delete(confirmMessage.id);
-        }, timeoutDuration.uiTimeoutMs);
+        }, meetingTimeouts.uiTimeoutMs);
         sessionState.timeouts.uiTimeoutId = uiTimeoutId;
         return true;
     }
