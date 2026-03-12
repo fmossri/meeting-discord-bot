@@ -127,6 +127,7 @@ describe('Session Manager', () => {
 			expect(transcriptWorker.closeTranscript).toHaveBeenCalledWith('session-1', {
 				channelId: 'voice-123',
 				participantDisplayNames: ['Alice'],
+				closure: null,
 			});
 			expect(result).toEqual({ reportPath: mockReportPath, summary: mockSummaryText });
 			const secondClose = await sessionManager.closeSession('session-1');

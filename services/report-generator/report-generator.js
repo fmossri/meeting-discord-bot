@@ -3,6 +3,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 
 function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
+    const FALLBACK_GAP_DISPLAY_NAME = 'System';
 
     function formatReportLine(stringsObject, widthsObject, report) {
         let { timeString, nameString, textString } = stringsObject;
@@ -72,7 +73,7 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                     throw new Error(`Invalid transcript file: metadata must contain transcriptId, channelId, meetingStartIso, and participantDisplayNames (with at least one participant)`);
                 }
                 timeColumnWidth = " hh:mm:ss ".length;
-                nameColumnWidth = Math.max(...participantDisplayNames.map(name => name.length)) + 2;
+                nameColumnWidth = Math.max(...participantDisplayNames.map(name => name.length), FALLBACK_GAP_DISPLAY_NAME.length) + 2;
                 textColumnWidth = 69 - timeColumnWidth - nameColumnWidth;
                 const projectRoot = pathImpl.join(__dirname, '..', '..');
     
@@ -91,6 +92,22 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                 });
                 report.push(`# Transcript for ${sessionId} on ${channelId} at ${dateTimeStr}`);
                 report.push(`## Participants: ${participantDisplayNames.join(', ')}`);
+
+                if (JSONLine.closure?.autoClose) {
+                    const endedAt = JSONLine.closure.endedAtIso ? new Date(JSONLine.closure.endedAtIso).toLocaleTimeString('en-GB', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false,
+                    }) : 'unknown time';
+                    const reason = JSONLine.closure.reason ?? 'inactivity';
+                    report.push('');
+                    report.push('## Meeting ended automatically');
+                    report.push(`Reason: ${reason}.`);
+                    report.push(`Ended at: ${endedAt}.`);
+                    report.push('Report may be partial; see gap markers below.');
+                }
+
                 report.push('```text');
 
                 ifFirstLine = false;
@@ -99,7 +116,8 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
             if (!JSONLine.text?.trim()) {
                 continue;
             }
-            segmentCount++;
+            const isGap = JSONLine.type === 'gap';
+            if (!isGap) segmentCount++;
             const timestampMs = typeof JSONLine.clockTimeMs === 'number'
                 ? JSONLine.clockTimeMs
                 : null;
@@ -113,7 +131,9 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                 });
             const stringsToFormat = {
                 timeString: timeString,
-                nameString: JSONLine.displayName ?? 'Undefined',
+                nameString: isGap
+                    ? (JSONLine.displayName ?? FALLBACK_GAP_DISPLAY_NAME)
+                    : (JSONLine.displayName ?? 'Undefined'),
                 textString: JSONLine.text,
             };
             const columnWidths = {

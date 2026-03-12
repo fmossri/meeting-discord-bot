@@ -469,7 +469,10 @@ describe('Bot Coordinator', () => {
 			await coordinator.handleButtonInteraction(interaction);
 
 			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
-			expect(closeSessionMock).toHaveBeenCalledWith(sessionId);
+			expect(closeSessionMock).toHaveBeenCalledWith(
+				sessionId,
+				expect.objectContaining({ autoClose: false, closeReason: 'manual', closedAtMs: expect.any(Number) })
+			);
 			expect(followUpMock).toHaveBeenCalledWith({
 				content: expect.stringContaining('Meeting summary.'),
 			});
@@ -570,7 +573,10 @@ describe('Bot Coordinator', () => {
 			const result = await coordinator.autoCloseMeeting('session-1');
 
 			expect(result).toBe(true);
-			expect(closeSessionMock).toHaveBeenCalledWith('session-1');
+			expect(closeSessionMock).toHaveBeenCalledWith(
+				'session-1',
+				expect.objectContaining({ autoClose: true, closeReason: 'inactivity', closedAtMs: expect.any(Number) })
+			);
 			expect(followUpMock).toHaveBeenCalledWith({
 				content: 'Meeting closed due to inactivity. The partial report is saved.',
 			});

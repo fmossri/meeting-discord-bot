@@ -262,7 +262,7 @@ function createSessionManager({
 		}
 	}
 
-	async function closeSession(sessionId) {
+	async function closeSession(sessionId, { autoClose = false, closeReason = null, closedAtMs = null } = {}) {
         let stage = 'transcript';
 
         try {
@@ -284,9 +284,17 @@ function createSessionManager({
             flushQueues(sessionId);
 
 			stage = 'transcript';
+			const endedAtIso = new Date(typeof closedAtMs === 'number' ? closedAtMs : Date.now()).toISOString();
 			await transcriptWorker.closeTranscript(sessionId, {
 				channelId: sessionState.voiceChannelId,
 				participantDisplayNames: displayNames,
+				closure: autoClose
+					? {
+						autoClose: true,
+						reason: closeReason ?? 'inactivity',
+						endedAtIso,
+					}
+					: null,
 			});
 			stage = 'report';
 			const reportPath = await reportGenerator.generateReport(transcriptPath);

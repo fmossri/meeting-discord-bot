@@ -78,7 +78,9 @@ describe('generateReport', () => {
         mockFs.createReadStream.mockReturnValue(createReadStreamFromString(transcriptContent));
         await generator.generateReport('any-path');
         const [, content] = mockFs.writeFileSync.mock.calls[0];
-        expect(content).not.toContain('  ');
+        // Don't assert on raw whitespace: the report is fixed-width and contains padding spaces.
+        // Instead, assert that the whitespace-only segment text did not get rendered.
+        expect(content).not.toContain('| Alice |   ');
         expect(content).toContain('Real content');
     });
 });

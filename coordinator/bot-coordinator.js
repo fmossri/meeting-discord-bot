@@ -281,7 +281,11 @@ function createBotCoordinator(sessionStore) {
         try {
             stopVoiceCapture(sessionId);
 
-            const closeResult = await client.sessionManager.closeSession(sessionId);
+            const closeResult = await client.sessionManager.closeSession(sessionId, {
+                autoClose,
+                closeReason: autoClose ? 'inactivity' : 'manual',
+                closedAtMs: Date.now(),
+            });
             if (!closeResult) {
                 return false;
             }
