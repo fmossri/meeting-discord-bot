@@ -374,4 +374,71 @@ describe('closeTranscript', () => {
         expect(mergeCall).toBeDefined();
         expect(mergeCall[0]).toBe(transcriptPath);
     });
+
+    it('sorts segment content by chunkId (and clockTimeMs) when appending to final transcript', async () => {
+        const unsortedJsonl = [
+            JSON.stringify({ chunkId: 2, text: 'second', clockTimeMs: 200 }),
+            JSON.stringify({ chunkId: 0, text: 'zeroth', clockTimeMs: 0 }),
+            JSON.stringify({ chunkId: 1, text: 'first', clockTimeMs: 100 }),
+        ].join('\n');
+        mockFs.promises.readFile.mockResolvedValue(unsortedJsonl);
+
+        await worker.startTranscript('test-transcript');
+        const transcriptPath = await worker.closeTranscript('test-transcript', {
+            channelId: 'ch-1',
+            participantDisplayNames: ['Alice'],
+        });
+
+        const appendToPathCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0] === transcriptPath);
+        expect(appendToPathCalls.length).toBe(1);
+        const appendedContent = appendToPathCalls[0][1];
+        const lines = appendedContent.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        const chunkIds = lines.map((l) => l.chunkId);
+        expect(chunkIds).toEqual([0, 1, 2]);
+        expect(lines[0].text).toBe('zeroth');
+        expect(lines[1].text).toBe('first');
+        expect(lines[2].text).toBe('second');
+    });
+
+    it('sorts transcript lines with gaps by chunkId so gaps appear next to neighbors', async () => {
+        const unsortedWithGap = [
+            JSON.stringify({ chunkId: 3, text: 'segment three', type: 'segment' }),
+            JSON.stringify({ chunkId: 1, text: 'segment one', type: 'segment' }),
+            JSON.stringify({ type: 'gap', chunkId: 2, text: 'Chunk 2 never reached the worker queue', displayName: 'System' }),
+        ].join('\n');
+        mockFs.promises.readFile.mockResolvedValue(unsortedWithGap);
+
+        await worker.startTranscript('test-transcript');
+        const transcriptPath = await worker.closeTranscript('test-transcript');
+
+        const appendToPathCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0] === transcriptPath);
+        expect(appendToPathCalls.length).toBe(1);
+        const appendedContent = appendToPathCalls[0][1];
+        const lines = appendedContent.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        expect(lines.length).toBe(3);
+        expect(lines.map((l) => l.chunkId)).toEqual([1, 2, 3]);
+        expect(lines[1].type).toBe('gap');
+        expect(lines[1].text).toContain('never reached');
+    });
+
+    it('preserves original order within a chunk when any line has null clockTimeMs', async () => {
+        const sameChunkWithNull = [
+            JSON.stringify({ chunkId: 1, text: 'first', clockTimeMs: 100 }),
+            JSON.stringify({ chunkId: 1, text: 'middle', clockTimeMs: null }),
+            JSON.stringify({ chunkId: 1, text: 'last', clockTimeMs: 200 }),
+        ].join('\n');
+        mockFs.promises.readFile.mockResolvedValue(sameChunkWithNull);
+
+        await worker.startTranscript('test-transcript');
+        const transcriptPath = await worker.closeTranscript('test-transcript');
+
+        const appendToPathCalls = mockFs.promises.appendFile.mock.calls.filter((c) => c[0] === transcriptPath);
+        expect(appendToPathCalls.length).toBe(1);
+        const appendedContent = appendToPathCalls[0][1];
+        const lines = appendedContent.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+        expect(lines.length).toBe(3);
+        expect(lines[0].text).toBe('first');
+        expect(lines[1].text).toBe('middle');
+        expect(lines[2].text).toBe('last');
+    });
 });

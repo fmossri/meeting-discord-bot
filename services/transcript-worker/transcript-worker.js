@@ -3,8 +3,8 @@ const logger = require('../logger/logger');
 const appMetrics = require('../metrics/metrics');
 const { sttTimeoutMs } = require('../../config/timeouts.js');
 
-const WAV_SAMPLE_RATE = 16000;
 const COMPONENT = 'transcript-worker';
+const WAV_SAMPLE_RATE = 16000;
 const WAV_CHANNELS = 1;
 const MAX_RETRIES = 3;
 const FLUSH_AFTER_PROCESSED_CHUNKS = 5;
@@ -89,9 +89,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	function ensureProcessing(transcriptId) {
-		if (!transcriptsMap.has(transcriptId)) {
-			throw new Error('Invariant: transcript not found in ensureProcessing');
-		}
 		const transcript = transcriptsMap.get(transcriptId);
 		if (!transcript.transcriptState.processingPromise) {
 			transcript.transcriptState.processingPromise = processNextChunk(transcriptId)
@@ -103,12 +100,13 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	async function enqueueChunk(transcriptId, chunk) {
+        let transcript;
         try {
             if (!transcriptsMap.has(transcriptId)) {
                 throw new Error('Invariant: transcript not found in enqueueChunk');
             }
 
-            const transcript = transcriptsMap.get(transcriptId);
+            transcript = transcriptsMap.get(transcriptId);
 			if (typeof chunk.chunkId !== 'number') {
 				throw new Error('Chunk ID must be a number');
 			}
@@ -133,9 +131,6 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				queueDepth: transcript.chunksQueue.length,
 			});
 
-			if (!transcript.transcriptState.processingPromise) {
-				ensureProcessing(transcriptId);
-			}
 		} catch (error) {
 			appMetrics.increment('chunk_enqueue_validation_failures_total');
 			logger.error(COMPONENT, 'chunk_enqueue_failed', 'Chunk validation or enqueue failed', {
@@ -147,6 +142,7 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			});
 			throw error;
 		}
+        if (!transcript.transcriptState.processingPromise) ensureProcessing(transcriptId);
 	}
 
 	function getSegmentClockTimeMs(chunk, segment) {
@@ -167,11 +163,8 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		const transcript = transcriptsMap.get(transcriptId);
 		if (transcript.processedChunks.length === 0) return;
 
-		// Order by chunkId so late-arriving chunks are placed between n-1 and n+1.
-		const sortedChunks = [...transcript.processedChunks].sort((a, b) => a.chunkId - b.chunkId);
-
 		const lines = [];
-		for (const chunk of sortedChunks) {
+		for (const chunk of transcript.processedChunks) {
 			if (chunk.type === 'gap') {
 				const JSONLine = {
 					type: 'gap',
@@ -378,6 +371,82 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 		}
 	}
 
+    function addGapMarkers(transcriptId, missingChunkIds) {
+        const transcript = transcriptsMap.get(transcriptId);
+        let chunksList; 
+        if (missingChunkIds?.length > 0) {
+            chunksList = missingChunkIds.map((chunkId) => ({
+                chunkId: chunkId, 
+                text: `Chunk ${chunkId} never reached the worker queue`,
+            }));
+
+        } else {
+            chunksList = transcript.failedChunks
+
+        }
+        for (const chunk of chunksList) {
+            const clockTimeMs =
+                typeof chunk.chunkClockTimeMs === 'number'
+                    ? chunk.chunkClockTimeMs
+                    : null;
+            transcript.processedChunks.push({
+                type: 'gap',
+                chunkId: chunk.chunkId,
+                displayName: chunk.displayName ?? 'System',
+                clockTimeMs,
+                retryCount: chunk.retryCount ?? null,
+                reason: chunk.lastErrorClass ?? null,
+                text: chunk.text ?? formatGapText({
+                    chunkId: chunk.chunkId,
+                    retryCount: chunk.retryCount ?? MAX_RETRIES,
+                    reason: chunk.lastErrorClass ?? null,
+                }),
+            });
+        }
+    }
+
+	function listMissingChunks(fileContent) {
+		const lines = typeof fileContent === 'string' ? fileContent.split('\n').filter(Boolean) : [];
+		const knownChunkIds = new Set();
+		for (const line of lines) {
+			try {
+				const obj = JSON.parse(line);
+				if (typeof obj.chunkId === 'number') knownChunkIds.add(obj.chunkId);
+			} catch {
+				// skip non-JSON or malformed lines
+			}
+		}
+		if (knownChunkIds.size === 0) return [];
+		const maxId = Math.max(...knownChunkIds);
+		const missing = [];
+		for (let i = 0; i <= maxId; i++) {
+			if (!knownChunkIds.has(i)) missing.push(i);
+		}
+		return missing;
+	}
+
+	/** Sort JSONL lines by chunkId, then by clockTimeMs within same chunk. If any line in a chunk has null/missing clockTimeMs, that chunk's lines keep their original order. */
+	function sortTranscriptLinesByChunkId(fileContent) {
+		const lines = typeof fileContent === 'string' ? fileContent.split('\n').filter(Boolean) : [];
+		const withKeys = lines.map((line, index) => {
+			try {
+				const obj = JSON.parse(line);
+				const chunkId = typeof obj.chunkId === 'number' ? obj.chunkId : Infinity;
+				const clockTimeMs = obj.clockTimeMs;
+				const hasNumericTime = typeof clockTimeMs === 'number';
+				return { line, chunkId, clockTimeMs: hasNumericTime ? clockTimeMs : 0, hasNumericTime, index };
+			} catch {
+				return { line, chunkId: Infinity, clockTimeMs: 0, hasNumericTime: false, index };
+			}
+		});
+		withKeys.sort((a, b) => {
+			if (a.chunkId !== b.chunkId) return a.chunkId - b.chunkId;
+			if (a.hasNumericTime && b.hasNumericTime) return a.clockTimeMs - b.clockTimeMs;
+			return a.index - b.index;
+		});
+		return withKeys.map(({ line }) => line).join('\n');
+	}
+
 	async function closeTranscript(transcriptId, { channelId, participantDisplayNames, closure } = {}) {
         try {
             if (!transcriptsMap.has(transcriptId)) {
@@ -423,29 +492,17 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					});
 
 					// Persist explicit gap markers in the transcript timeline.
-					for (const failedChunk of transcript.failedChunks) {
-						const clockTimeMs =
-							typeof failedChunk.chunkClockTimeMs === 'number'
-								? failedChunk.chunkClockTimeMs
-								: null;
-						transcript.processedChunks.push({
-							type: 'gap',
-							chunkId: failedChunk.chunkId,
-							displayName: failedChunk.displayName ?? 'System',
-							clockTimeMs,
-							retryCount: failedChunk.retryCount ?? null,
-							reason: failedChunk.lastErrorClass ?? null,
-							text: formatGapText({
-								chunkId: failedChunk.chunkId,
-								retryCount: failedChunk.retryCount ?? MAX_RETRIES,
-								reason: failedChunk.lastErrorClass ?? null,
-							}),
-						});
-					}
+					addGapMarkers(transcriptId);
 					await appendToTemp(transcriptId);
 					transcript.failedChunks = [];
 				}
+
 			}
+            const missingChunkIds = listMissingChunks(await fsImpl.promises.readFile(transcript.transcriptState.tmpPath, 'utf8'));
+            if (missingChunkIds.length > 0) {
+                addGapMarkers(transcriptId, missingChunkIds);
+                await appendToTemp(transcriptId);
+            }
 			const transcriptPath = transcript.transcriptState.filePath;
 			const tmpPath = transcript.transcriptState.tmpPath;
 			await writeTranscriptHeader(transcriptPath, {
@@ -457,7 +514,9 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 			});
 			try {
 				const segmentContent = await fsImpl.promises.readFile(tmpPath, 'utf8');
-				await fsImpl.promises.appendFile(transcriptPath, segmentContent);
+				const sortedContent = sortTranscriptLinesByChunkId(segmentContent);
+
+				await fsImpl.promises.appendFile(transcriptPath, sortedContent);
 				await fsImpl.promises.unlink(tmpPath).catch(() => {});
 			} catch (err) {
 				if (err.code !== 'ENOENT') throw err;
