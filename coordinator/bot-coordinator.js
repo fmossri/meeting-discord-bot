@@ -16,11 +16,19 @@ function createBotCoordinator(sessionStore) {
     async function connectToChannel(sessionId) {
         try {
             const sessionState = sessionStore.getSessionById(sessionId);
+            
             const voiceConnection = joinVoiceChannel({
                 channelId: sessionState.voiceChannelId,
                 guildId: sessionState.originalInteraction.guild.id,
                 adapterCreator: sessionState.originalInteraction.guild.voiceAdapterCreator,
                 selfDeaf: false
+            });
+            voiceConnection.on('error', (error) => {
+                logger.error(COMPONENT, 'voice_connection_error', 'Voice connection error', {
+                    sessionId,
+                    errorClass: error.constructor?.name || 'Error',
+                    message: error.message,
+                });
             });
             sessionState.voiceConnection = voiceConnection;
             return true;
@@ -103,7 +111,20 @@ function createBotCoordinator(sessionStore) {
             participantState.subscription.on('end', () => {
                 unsubscribeFromStream(sessionId, participantId);
             });
+            decoder.on('error', (error) => {
+                logger.error(COMPONENT, 'decoder_failed', 'Decoder error', {
+                    sessionId,
+                    participantId,
+                    errorClass: error.constructor?.name || 'Error',
+                    message: error.message,
+                });
+            });
+
             participantState.pcmStream = participantState.subscription.pipe(decoder);
+            logger.info(COMPONENT, 'voice_subscribe_ok', 'Subscribed to participant PCM stream', {
+                sessionId,
+                participantId,
+            });
         } catch (error) {
             throw error;
         }
@@ -111,18 +132,6 @@ function createBotCoordinator(sessionStore) {
 
     async function registerParticipant(sessionId, participantId, interaction) {
         const sessionState = sessionStore.getSessionById(sessionId);
-        if (!sessionState) {
-            logger.error(COMPONENT, 'participant_accept_failed', 'Session not found', {
-                sessionId,
-                participantId,
-                errorClass: 'SessionNotFound',
-            });
-            await interaction.editReply({
-                content: 'An error occurred while registering you as a participant: session not found.',
-                flags: MessageFlags.Ephemeral,
-            });
-            return;
-        }
         if (!sessionState.voiceConnection) {
             try {
                 if (!(await connectToChannel(sessionId))) {
@@ -140,7 +149,11 @@ function createBotCoordinator(sessionStore) {
                     errorClass: error.constructor?.name || 'Error',
                     message: error.message,
                 });
-                throw error;
+                await interaction.editReply({
+                    content: 'An error occurred while registering you as a participant. Please try again.',
+                    flags: MessageFlags.Ephemeral,
+                });
+                return false;
             }
         }
         if (sessionState.timeouts.uiTimeoutId) {
@@ -161,6 +174,10 @@ function createBotCoordinator(sessionStore) {
                     sessionId,
                     participantId,
                     errorClass: 'StartSessionFailed',
+                });
+                await interaction.editReply({
+                    content: 'An error occurred while registering you as a participant. Please try again.',
+                    flags: MessageFlags.Ephemeral,
                 });
                 return false;
             }
@@ -351,8 +368,8 @@ function createBotCoordinator(sessionStore) {
         try {
             switch (interaction.customId) {
                 case 'disclaimer-accept':
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     if (!sessionState.participantIds.includes(userId) && !sessionState.rejectedIds.includes(userId)) {
-                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                         if (await registerParticipant(messageId, userId, interaction)) {
                             await interaction.editReply({
                                 content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
@@ -369,6 +386,7 @@ function createBotCoordinator(sessionStore) {
                     else {await interaction.deferUpdate(); break;}
 
                 case 'disclaimer-reject':
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     if (!sessionState.participantIds.includes(userId) && !sessionState.rejectedIds.includes(userId)) {
                         sessionState.rejectedIds.push(userId);
                         await interaction.reply({
@@ -380,11 +398,11 @@ function createBotCoordinator(sessionStore) {
                     else {await interaction.deferUpdate(); break;}
             
                 case 'close-meeting-confirm':
+                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     if (sessionState.timeouts.uiTimeoutId) {
                         clearTimeout(sessionState.timeouts.uiTimeoutId);
                         sessionState.timeouts.uiTimeoutId = null;
                     }
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
                     if (!(await executeClose(sessionId))) {
                         await interactionErrorHelper(interaction, 'The meeting has ended. See the message above for details.');
@@ -418,6 +436,7 @@ function createBotCoordinator(sessionStore) {
                 participantIds: [],
                 rejectedIds: [],
                 dmIds: [],
+                initialMemberIds: Array.from(voiceChannel.members?.keys?.() ?? []),
                 participantStates: new Map(),
                 voiceChannelId: voiceChannel.id,
                 originalInteraction: interaction,
@@ -616,6 +635,10 @@ function createBotCoordinator(sessionStore) {
             return;
         }
 
+        if (sessionState.initialMemberIds && sessionState.initialMemberIds.includes(userId)) {
+            return;
+        }
+
         if (!sessionState.dmIds.includes(userId)) {
             if (user) {
                 try {
@@ -625,7 +648,7 @@ function createBotCoordinator(sessionStore) {
                         participantId: userId,
                     });
                 } catch (err) {
-                    logger.error(COMPONENT, 'participant_accept_failed', 'Could not DM late joiner', {
+                    logger.error(COMPONENT, 'late_joiner_dm_failed', 'Could not DM late joiner', {
                         sessionId,
                         participantId: userId,
                         errorClass: 'DmFailed',
