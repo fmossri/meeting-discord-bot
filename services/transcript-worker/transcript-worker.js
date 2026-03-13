@@ -8,6 +8,8 @@ const WAV_SAMPLE_RATE = 16000;
 const WAV_CHANNELS = 1;
 const MAX_RETRIES = 3;
 const FLUSH_AFTER_PROCESSED_CHUNKS = 5;
+const STT_READY_TIMEOUT_MS = 120000;
+const STT_READY_POLL_MS = 2000;
 
 function isValidWav(audioBuffer) {
 	try {
@@ -23,6 +25,21 @@ function isValidWav(audioBuffer) {
 
 function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 	const transcriptsMap = new Map();
+	let sttReadyWaited = false;
+
+	async function waitForSttReady() {
+		const deadline = Date.now() + STT_READY_TIMEOUT_MS;
+		const healthUrl = sttBaseUrl.replace(/\/$/, '') + '/health';
+		while (Date.now() < deadline) {
+			try {
+				const res = await fetchImpl(healthUrl);
+				const body = await res.json();
+				if (body && body.ready === true) return;
+			} catch (_) { /* ignore */ }
+			await new Promise((r) => setTimeout(r, STT_READY_POLL_MS));
+		}
+		throw new Error(`STT wrapper not ready within ${STT_READY_TIMEOUT_MS}ms`);
+	}
 
 	function getTotalQueueDepth() {
 		let sum = 0;
@@ -265,6 +282,10 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 				return;
 			}
 			transcript.inFlight = true;
+			if (!sttReadyWaited) {
+				await waitForSttReady();
+				sttReadyWaited = true;
+			}
 			const postUrl = sttBaseUrl + '/transcribe';
 
 			while (transcript.chunksQueue.length > 0) {
@@ -496,13 +517,23 @@ function createTranscriptWorker({ sttBaseUrl, fetchImpl, fsImpl, pathImpl }) {
 					await appendToTemp(transcriptId);
 					transcript.failedChunks = [];
 				}
-
 			}
-            const missingChunkIds = listMissingChunks(await fsImpl.promises.readFile(transcript.transcriptState.tmpPath, 'utf8'));
-            if (missingChunkIds.length > 0) {
-                addGapMarkers(transcriptId, missingChunkIds);
-                await appendToTemp(transcriptId);
-            }
+
+			let missingChunkIds = [];
+			try {
+				const tmpContentForMissing = await fsImpl.promises.readFile(transcript.transcriptState.tmpPath, 'utf8');
+				missingChunkIds = listMissingChunks(tmpContentForMissing);
+			} catch (err) {
+				if (err.code !== 'ENOENT') {
+					throw err;
+				}
+				// No tmp file: no segments were ever flushed; treat as "no missing chunks" here.
+				missingChunkIds = [];
+			}
+			if (missingChunkIds.length > 0) {
+				addGapMarkers(transcriptId, missingChunkIds);
+				await appendToTemp(transcriptId);
+			}
 			const transcriptPath = transcript.transcriptState.filePath;
 			const tmpPath = transcript.transcriptState.tmpPath;
 			await writeTranscriptHeader(transcriptPath, {
