@@ -160,6 +160,11 @@ function createSessionManager({
                         const participant = { participantId: participantId, participantState: participantState };
                         const chunk = cutChunk(sessionId, participant, TARGET_SAMPLES);
                         sessionState.chunksQueue.push(chunk);
+                        logger.debug(COMPONENT, 'chunk_cut_enqueued', 'Cut chunk and enqueued (temp debug)', {
+                            sessionId,
+                            participantId,
+                            chunkId: chunk.chunkId,
+                        });
                         ensureProcessing(sessionId);
                     }
                     catch (error) {
@@ -340,6 +345,14 @@ function createSessionManager({
 				message: error.message,
 			});
 			error.closeErrorClass = errorClass;
+			// Transcript already closed at report/summary stage; treat session as closed so later close attempts don't re-close transcript.
+			if (stage === 'report' || stage === 'summary') {
+				const sessionState = sessionStates.get(sessionId);
+				if (sessionState) {
+					appMetrics.incrementGauge('meetings_active', -1);
+					sessionStates.delete(sessionId);
+				}
+			}
 			throw error;
 		}
 	}
