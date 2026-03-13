@@ -15,12 +15,16 @@ module.exports = {
 
         // User left the meeting channel (to null OR another channel)
         if (oldSession && oldState.channelId !== newState.channelId) {
+            // Ignore the bot leaving (e.g. stopVoiceCapture during /close); only react when a participant leaves.
+            if (oldState.id === client.user?.id) return;
+
             const sessionState = oldSession.sessionState;
             // Channel not cached or user left before the meeting started -> do nothing.
-            if (!oldState.channel || !sessionState.started) return;
+            if (!oldState.channel || !sessionState?.started) return;
             const membersInChannel = oldState.channel.members;
             // Check if there are any participants in the meeting's voice channel.
             for (const member of membersInChannel) {
+                if (!member?.user?.id) continue;
                 // A participant is still in the channel -> do nothing.
                 if (sessionState.participantIds.includes(member.user.id)) {
                     return;
