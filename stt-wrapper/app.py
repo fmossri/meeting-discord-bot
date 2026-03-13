@@ -9,6 +9,7 @@ import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
 import io
 import time
 import base64
+import traceback
 
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
@@ -69,6 +70,7 @@ async def startup():
         app.state.model = model
         app.state.ready = True
     except Exception as e:
+        traceback.print_exc()
         app.state.ready = False
 
 @app.get("/health")
@@ -80,6 +82,8 @@ def health():
 
 @app.post("/transcribe")
 async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
+    if not app.state.ready or app.state.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
     model = app.state.model
     try:
         t0 = time.perf_counter()
@@ -109,4 +113,5 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
         return response
 
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

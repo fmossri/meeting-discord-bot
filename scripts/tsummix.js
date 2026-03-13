@@ -30,10 +30,12 @@ function runBot() {
 }
 
 function runSTT() {
-	const uvicorn = isWin
-		? path.join(root, '.venv', 'Scripts', 'uvicorn.exe')
-		: path.join(root, '.venv', 'bin', 'uvicorn');
-	const child = spawn(uvicorn, ['stt-wrapper.app:app'], { cwd: root, stdio: 'inherit', shell: isWin });
+	// Run via launcher so cuda_env sets LD_LIBRARY_PATH before uvicorn starts (same fix as model_benchmark.py).
+	const python = isWin
+		? path.join(root, '.venv', 'Scripts', 'python.exe')
+		: path.join(root, '.venv', 'bin', 'python3');
+	const launcher = path.join(__dirname, 'run_stt_server.py');
+	const child = spawn(python, [launcher], { cwd: root, stdio: 'inherit', shell: isWin });
 	child.on('error', (err) => console.error(err));
 	child.on('close', (code) => {
 		if (code !== 0 && code !== null) process.exitCode = code;
