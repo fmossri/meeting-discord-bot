@@ -479,9 +479,20 @@ function createBotCoordinator(sessionStore) {
         }
         try {
             stopVoiceCapture(sessionId);
-            sessionState.paused = true;
             const client = sessionState.originalInteraction.client;
-            await client.sessionManager.pauseSession(sessionId);
+            sessionState.paused = true;
+            const paused = await client.sessionManager.pauseSession(sessionId);
+            if (!paused) {
+                sessionState.paused = false;
+                logger.error(COMPONENT, 'session_pause_failed', 'Session manager did not acknowledge pause', {
+                    sessionId,
+                    errorClass: 'PauseSessionFailed',
+                });
+                await sessionState.originalInteraction.followUp({
+                    content: 'Failed to pause the meeting recording; recording is still active.',
+                }).catch(() => {});
+                return false;
+            }
             logger.info(COMPONENT, 'session_paused', 'Recording paused', {
                 sessionId,
                 reason: 'explicit',
@@ -490,14 +501,19 @@ function createBotCoordinator(sessionStore) {
                 await executeClose(sessionId, true);
             }, meetingTimeouts.explicitPauseMs);
             sessionState.timeouts.pauseTimeoutId = pauseTimeoutId;
+            return true;
         } catch (error) {
+            sessionState.paused = false;
             logger.error(COMPONENT, 'session_pause_failed', 'Error pausing meeting', {
                 sessionId,
                 errorClass: 'PauseSessionFailed',
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
-            throw error;
+            await sessionState.originalInteraction.followUp({
+                content: 'Failed to pause the meeting recording; recording is still active.',
+            }).catch(() => {});
+            return false;
         }
     }
 
@@ -517,6 +533,9 @@ function createBotCoordinator(sessionStore) {
                         sessionId,
                         errorClass: 'ConnectFailed',
                     });
+                    await sessionState.originalInteraction.followUp({
+                        content: 'Failed to resume the meeting recording; the meeting remains paused.',
+                    }).catch(() => {});
                     return false;
                 }
             }
@@ -531,6 +550,9 @@ function createBotCoordinator(sessionStore) {
                     voiceChannelId: sessionState.voiceChannelId,
                     errorClass: 'VoiceChannelNotFound',
                 });
+                await sessionState.originalInteraction.followUp({
+                    content: 'Failed to resume the meeting recording; the meeting remains paused.',
+                }).catch(() => {});
                 return false;
             }
             sessionState.paused = false;
@@ -547,6 +569,9 @@ function createBotCoordinator(sessionStore) {
                     sessionId,
                     errorClass: 'ResumeSessionFailed',
                 });
+                await sessionState.originalInteraction.followUp({
+                    content: 'Failed to resume the meeting recording; the meeting remains paused.',
+                }).catch(() => {});
                 return false;
             }
             logger.info(COMPONENT, 'session_resumed', 'Recording resumed', { sessionId });
@@ -562,6 +587,9 @@ function createBotCoordinator(sessionStore) {
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
+            await sessionState.originalInteraction.followUp({
+                content: 'Failed to resume the meeting recording; the meeting remains paused.',
+            }).catch(() => {});
             return false;
         }
     }

@@ -203,7 +203,7 @@ describe('Bot Coordinator', () => {
 	describe('pauseMeeting', () => {
 		it('sets sessionState.paused and pauseTimeoutId when session exists', async () => {
 			const closeSessionMock = jest.fn().mockResolvedValue({ reportPath: '/tmp/report.md', summary: 'Summary.' });
-			const pauseSessionMock = jest.fn();
+			const pauseSessionMock = jest.fn().mockResolvedValue(true);
 			const sessionState = {
 				participantIds: ['user-1'],
 				voiceConnection: { destroy: jest.fn(), receiver: { subscribe: mockReceiverSubscribe } },
@@ -515,7 +515,7 @@ describe('Bot Coordinator', () => {
 			await coordinator.handleButtonInteraction(interaction);
 
 			expect(interaction.followUp).toHaveBeenCalledWith({
-				content: 'An error occurred while closing the meeting.',
+				content: 'The meeting has ended. See the message above for details.',
 				flags: MessageFlags.Ephemeral,
 			});
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith(sessionId);
