@@ -268,7 +268,18 @@ function createBotCoordinator(sessionStore) {
 
     async function executeClose(sessionId, autoClose = false) {
         const sessionState = sessionStore.getSessionById(sessionId);
-        
+        const disabledAccept = new ButtonBuilder()
+            .setCustomId('disclaimer-accept')
+            .setLabel('Accept')
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(true);
+        const disabledReject = new ButtonBuilder()
+            .setCustomId('disclaimer-reject')
+            .setLabel('Reject')
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(true);
+        const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
+
         const client = sessionState.originalInteraction.client;
         if (sessionState.timeouts.uiTimeoutId) {
             clearTimeout(sessionState.timeouts.uiTimeoutId);
@@ -290,25 +301,12 @@ function createBotCoordinator(sessionStore) {
                 return false;
             }
             const { summary } = closeResult;
-            const closeMessage = autoClose ? 
-            'Meeting closed due to inactivity. The partial report is saved.' : 
+            const closeMessage = autoClose ?
+            'Meeting closed due to inactivity. The partial report is saved.' :
             `The meeting is over. Thank you for participating. \n\n**Summary:**\n${summary}`;
             await sessionState.originalInteraction.followUp({
                 content: closeMessage,
             });
-
-            const disabledAccept = new ButtonBuilder()
-                .setCustomId('disclaimer-accept')
-                .setLabel('Accept')
-                .setStyle(ButtonStyle.Success)
-                .setDisabled(true);
-            const disabledReject = new ButtonBuilder()
-                .setCustomId('disclaimer-reject')
-                .setLabel('Reject')
-                .setStyle(ButtonStyle.Danger)
-                .setDisabled(true);
-            const disabledRow = new ActionRowBuilder().addComponents(disabledAccept, disabledReject);
-            await sessionState.originalInteraction.editReply({ components: [disabledRow] });
 
             appMetrics.increment('meetings_closed_total');
             logger.info(COMPONENT, 'session_closed', 'Meeting closed', {
@@ -323,8 +321,17 @@ function createBotCoordinator(sessionStore) {
                 errorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
+            const closeErrorClass = error.closeErrorClass || 'CloseSessionFailed';
+            const failureMessage = closeErrorClass === 'SummaryGenerationFailed'
+                ? 'The meeting has ended. The report was saved, but the summary could not be generated. You can open the report file to read the transcript.'
+                : closeErrorClass === 'ReportGenerationFailed'
+                    ? 'The meeting has ended. The transcript was saved, but the report could not be generated.'
+                    : 'The meeting has ended. There was a problem closing the session; the transcript, report, or summary may be missing or incomplete.';
+            await sessionState.originalInteraction.followUp({ content: failureMessage }).catch(() => {});
             sessionStore.deleteSession(sessionId);
             return false;
+        } finally {
+            await sessionState.originalInteraction.editReply({ components: [disabledRow] }).catch(() => {});
         }
     }
 
@@ -380,7 +387,7 @@ function createBotCoordinator(sessionStore) {
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
                     if (!(await executeClose(sessionId))) {
-                        await interactionErrorHelper(interaction, 'An error occurred while closing the meeting.');
+                        await interactionErrorHelper(interaction, 'The meeting has ended. See the message above for details.');
                         break;
                     }
                     confirmMsgToSession.delete(interaction.message.id);
@@ -451,8 +458,9 @@ function createBotCoordinator(sessionStore) {
             return true;
         } catch (error) {
             logger.error(COMPONENT, 'session_start_failed', 'Error starting meeting', {
-                sessionId,
-                errorClass: 'SessionStartFailed',
+                guildId: interaction.guild?.id ?? null,
+                channelId: voiceChannel?.id ?? null,
+                errorClass: 'StartSessionFailed',
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });

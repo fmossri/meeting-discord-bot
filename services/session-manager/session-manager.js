@@ -303,13 +303,10 @@ function createSessionManager({
 			await transcriptWorker.closeTranscript(sessionId, {
 				channelId: sessionState.voiceChannelId,
 				participantDisplayNames: displayNames,
-				closure: autoClose
-					? {
-						autoClose: true,
-						reason: closeReason ?? 'inactivity',
-						endedAtIso,
-					}
-					: null,
+				closure: {
+					endedAtIso,
+					...(autoClose && { autoClose: true, reason: closeReason ?? 'inactivity' }),
+				},
 			});
 			stage = 'report';
 			const reportPath = await reportGenerator.generateReport(transcriptPath);
@@ -342,6 +339,7 @@ function createSessionManager({
 				stage,
 				message: error.message,
 			});
+			error.closeErrorClass = errorClass;
 			throw error;
 		}
 	}
