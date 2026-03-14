@@ -358,17 +358,18 @@ describe('Session Manager', () => {
 			await sessionManager.startSession('session-1');
 			sessionManager.chunkStream('session-1', 'u1');
 
-			const nowSpy = jest.spyOn(Date, 'now')
-				.mockReturnValueOnce(111) // chunk start clock time
-				.mockReturnValueOnce(222); // next chunk clock time after cut
+			// Data handler sets chunkClockTimeMs on first data; cutChunk uses that then updates state.
+			// Use a single fixed value so both reads of Date.now() are predictable across environments.
+			const fixedNow = 111;
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(fixedNow);
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
 			const chunk = transcriptWorker.enqueueChunk.mock.calls[0][1];
-			expect(chunk.chunkClockTimeMs).toBe(111);
-			expect(participantState.chunkerState.chunkClockTimeMs).toBe(222);
+			expect(chunk.chunkClockTimeMs).toBe(fixedNow);
+			expect(participantState.chunkerState.chunkClockTimeMs).toBe(fixedNow);
 
 			nowSpy.mockRestore();
 		});
@@ -466,12 +467,13 @@ describe('Session Manager', () => {
 				expect(errorSpy).toHaveBeenCalledWith(
 					'session-manager',
 					'chunk_send_failed',
-					'Worker enqueueChunk failed',
+					'Worker enqueueChunk failed after retries',
 					expect.objectContaining({
 						sessionId: 'session-1',
 						transcriptId: 'session-1',
 						sendRetryCount: 3,
-						errorClass: 'Error',
+						errorClass: 'EnqueueChunkFailed',
+						innerErrorClass: 'Error',
 						message: 'worker down',
 					})
 				);

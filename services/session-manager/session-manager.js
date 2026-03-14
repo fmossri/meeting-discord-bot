@@ -58,13 +58,6 @@ function createSessionManager({
             return chunk;
         }
         catch (error) {
-            logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk', {
-                sessionId,
-                transcriptId: sessionId,
-                participantId,
-                errorClass: error.constructor?.name || 'Error',
-                message: error.message,
-            });
             throw error;
         }
     }
@@ -90,12 +83,13 @@ function createSessionManager({
                 chunk.sendRetryCount++;
 
                 if (chunk.sendRetryCount === MAX_SEND_RETRIES) {
-                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed', {
+                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed after retries', {
                         sessionId,
                         transcriptId: sessionId,
                         chunkId: chunk?.chunkId,
                         sendRetryCount: chunk.sendRetryCount,
-                        errorClass: error.constructor?.name || 'Error',
+                        errorClass: 'EnqueueChunkFailed',
+                        innerErrorClass: error.constructor?.name || 'Error',
                         message: error.message,
                     });
                     continue;
@@ -142,6 +136,7 @@ function createSessionManager({
 			return false;
 		}
 		const TARGET_SAMPLES = 30 * 16000;
+		participantState.chunkerState._lastPcmLogMs = 0;
 		try {
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
@@ -154,16 +149,30 @@ function createSessionManager({
                     pcmBuffer
                 ]);
 				participantState.chunkerState.samplesInBuffer += samplesInThisBuffer;
+				const now = Date.now();
+				if (now - participantState.chunkerState._lastPcmLogMs >= 1000) {
+					participantState.chunkerState._lastPcmLogMs = now;
+					logger.debug(COMPONENT, 'pcm_data_received', 'PCM stream data', {
+						sessionId,
+						participantId,
+						displayName: participantState.displayName,
+						samplesInThisChunk: samplesInThisBuffer,
+						totalSamplesInBuffer: participantState.chunkerState.samplesInBuffer,
+					});
+				}
 
 				while (participantState.chunkerState.samplesInBuffer >= TARGET_SAMPLES) {
                     try {
                         const participant = { participantId: participantId, participantState: participantState };
                         const chunk = cutChunk(sessionId, participant, TARGET_SAMPLES);
                         sessionState.chunksQueue.push(chunk);
-                        logger.debug(COMPONENT, 'chunk_cut_enqueued', 'Cut chunk and enqueued (temp debug)', {
+                        logger.info(COMPONENT, 'chunk_cut', 'Cut chunk during meeting', {
                             sessionId,
                             participantId,
+                            displayName: participantState.displayName,
                             chunkId: chunk.chunkId,
+                            samplesCut: TARGET_SAMPLES,
+                            queueLengthAfter: sessionState.chunksQueue.length,
                         });
                         ensureProcessing(sessionId);
                     }
@@ -172,7 +181,8 @@ function createSessionManager({
                             sessionId,
                             transcriptId: sessionId,
                             participantId,
-                            errorClass: error.constructor?.name || 'Error',
+                            errorClass: 'ChunkCutFailed',
+                            innerErrorClass: error.constructor?.name || 'Error',
                             message: error.message,
                         });
                         return false;
@@ -185,14 +195,15 @@ function createSessionManager({
 				sessionId,
 				transcriptId: sessionId,
 				participantId,
-				errorClass: error.constructor?.name || 'Error',
+				errorClass: 'ChunkStreamSetupFailed',
+				innerErrorClass: error.constructor?.name || 'Error',
 				message: error.message,
 			});
 			return false;
 		}
 	}
 
-    function flushQueues(sessionId) {
+    async function flushQueues(sessionId) {
         const sessionState = sessionStates.get(sessionId);
         if (!sessionState) {
             throw new Error('Invariant: sessionState missing in flushQueues');
@@ -204,11 +215,32 @@ function createSessionManager({
             const participant = { participantId: participantId, participantState: participantState };
             const samplesInBuffer = participantState.chunkerState.samplesInBuffer;
             if (samplesInBuffer > 0) {
-                const chunk = cutChunk(sessionId, participant, samplesInBuffer);
-                sessionState.chunksQueue.push(chunk);
-                ensureProcessing(sessionId);
+                try {
+                    const chunk = cutChunk(sessionId, participant, samplesInBuffer);
+                    sessionState.chunksQueue.push(chunk);
+                    logger.info(COMPONENT, 'chunk_cut', 'Cut chunk on flush', {
+                        sessionId,
+                        participantId,
+                        displayName: participantState.displayName,
+                        chunkId: chunk.chunkId,
+                        samplesFlushed: samplesInBuffer,
+                        queueLengthAfter: sessionState.chunksQueue.length,
+                    });
+                    ensureProcessing(sessionId);
+                } catch (error) {
+                    logger.error(COMPONENT, 'chunk_send_failed', 'Error cutting chunk on flush', {
+                        sessionId,
+                        transcriptId: sessionId,
+                        participantId,
+                        errorClass: 'ChunkCutFailed',
+                        innerErrorClass: error.constructor?.name || 'Error',
+                        message: error.message,
+                    });
+                    throw error;
+                }
             }
         }
+        await ensureProcessing(sessionId);
         return true;
     }
 
@@ -226,7 +258,7 @@ function createSessionManager({
             return false;
         }
         try {
-            flushQueues(sessionId);
+            await flushQueues(sessionId);
             return true;
         } catch (error) {
             logger.error(COMPONENT, 'session_pause_failed', 'Error pausing session', {
@@ -301,7 +333,7 @@ function createSessionManager({
 
             stage = 'drain';
 			await ensureProcessing(sessionId);
-            flushQueues(sessionId);
+            await flushQueues(sessionId);
 
 			stage = 'transcript';
 			const endedAtIso = new Date(typeof closedAtMs === 'number' ? closedAtMs : Date.now()).toISOString();
@@ -332,11 +364,14 @@ function createSessionManager({
 			return { reportPath, summary };
 		} catch (error) {
 			appMetrics.increment('session_close_failures_total');
+			const isNoTranscript = stage === 'transcript' && typeof error?.message === 'string' && error.message.includes('No transcript segments were produced');
 			const errorClass = stage === 'report'
 				? 'ReportGenerationFailed'
 				: stage === 'summary'
 					? 'SummaryGenerationFailed'
-					: 'CloseSessionFailed';
+					: isNoTranscript
+						? 'EmptyTranscript'
+						: 'CloseSessionFailed';
 			logger.error(COMPONENT, 'session_close_failed', 'Close session failed', {
 				sessionId,
 				errorClass,
