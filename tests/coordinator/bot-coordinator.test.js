@@ -6,7 +6,7 @@ const mockDecoder = jest.fn();
 
 jest.mock('@discordjs/voice', () => ({
 	joinVoiceChannel: (...args) => mockJoinVoiceChannel(...args),
-	EndBehaviorType: { AfterSilence: 0 },
+	EndBehaviorType: { AfterSilence: 0, Manual: 1 },
 }));
 
 jest.mock('prism-media', () => ({
@@ -29,7 +29,8 @@ beforeEach(() => {
 		on: jest.fn(),
 		pipe: jest.fn().mockReturnValue({}),
 	});
-	mockDecoder.mockReturnValue({});
+	// Coordinator calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
+	mockDecoder.mockReturnValue({ on: jest.fn() });
 });
 
 afterEach(async () => {
@@ -390,7 +391,7 @@ describe('Bot Coordinator', () => {
 			);
 		});
 
-		it('pushes to rejectedIds and replies when disclaimer-reject first time', async () => {
+		it('pushes to rejectedIds and edits reply when disclaimer-reject first time', async () => {
 			const sessionState = {
 				participantIds: [],
 				rejectedIds: [],
@@ -407,9 +408,9 @@ describe('Bot Coordinator', () => {
 			await coordinator.handleButtonInteraction(interaction);
 
 			expect(sessionState.rejectedIds).toContain('user-456');
-			expect(interaction.reply).toHaveBeenCalledWith({
+			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
+			expect(interaction.editReply).toHaveBeenCalledWith({
 				content: 'Disclaimer rejected. You are not a participant in the meeting and will not be recorded.',
-				flags: MessageFlags.Ephemeral,
 			});
 		});
 

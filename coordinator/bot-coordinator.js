@@ -24,9 +24,9 @@ function createBotCoordinator(sessionStore) {
                 selfDeaf: false
             });
             voiceConnection.on('error', (error) => {
-                logger.error(COMPONENT, 'voice_connection_error', 'Voice connection error', {
+                logger.error(COMPONENT, 'voice_connection_failed', 'Voice connection error', {
                     sessionId,
-                    errorClass: error.constructor?.name || 'Error',
+                    errorClass: 'VoiceConnectionError',
                     message: error.message,
                 });
             });
@@ -85,8 +85,7 @@ function createBotCoordinator(sessionStore) {
             }
             const options = {
                 end: {
-                    behavior: EndBehaviorType.AfterSilence,
-                    duration: 100
+                    behavior: EndBehaviorType.Manual
                 }
             };
             const receiver = sessionState.voiceConnection.receiver;
@@ -99,29 +98,33 @@ function createBotCoordinator(sessionStore) {
             );
             participantState.subscription = receiver.subscribe(participantId, options);
             participantState.subscription.on('error', (error) => {
-                logger.error(COMPONENT, 'subscription_failed', 'Subscription error', {
+                logger.error(COMPONENT, 'voice_connection_failed', 'Subscription error', {
                     sessionId,
                     participantId,
-                    errorClass: 'SubscribeFailed',
+                    errorClass: 'VoiceConnectionError',
                     innerErrorClass: error.constructor?.name || 'Error',
                     message: error.message,
                 });
                 unsubscribeFromStream(sessionId, participantId);
             });
             participantState.subscription.on('end', () => {
-                unsubscribeFromStream(sessionId, participantId);
-            });
-            decoder.on('error', (error) => {
-                logger.error(COMPONENT, 'decoder_failed', 'Decoder error', {
+                logger.info(COMPONENT, 'subscription_end', 'Subscription stream ended', {
                     sessionId,
                     participantId,
-                    errorClass: error.constructor?.name || 'Error',
+                });
+            });
+            decoder.on('error', (error) => {
+                logger.error(COMPONENT, 'voice_connection_failed', 'Decoder error', {
+                    sessionId,
+                    participantId,
+                    errorClass: 'VoiceConnectionError',
+                    innerErrorClass: error.constructor?.name || 'Error',
                     message: error.message,
                 });
             });
 
             participantState.pcmStream = participantState.subscription.pipe(decoder);
-            logger.info(COMPONENT, 'voice_subscribe_ok', 'Subscribed to participant PCM stream', {
+            logger.info(COMPONENT, 'subscription_ok', 'Subscribed to participant PCM stream', {
                 sessionId,
                 participantId,
             });
@@ -146,7 +149,7 @@ function createBotCoordinator(sessionStore) {
                 logger.error(COMPONENT, 'participant_accept_failed', 'Failed to connect to voice channel', {
                     sessionId,
                     participantId,
-                    errorClass: error.constructor?.name || 'Error',
+                    errorClass: 'ConnectFailed',
                     message: error.message,
                 });
                 await interaction.editReply({
@@ -201,18 +204,28 @@ function createBotCoordinator(sessionStore) {
             sessionId,
             participantId,
         });
-        if (!sessionState.paused) {
-            subscribeToStream(sessionId, participantId);
-            interaction.client.sessionManager.chunkStream(sessionId, participantId);
-            await sessionState.originalInteraction.followUp({
-                content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript.`,
+        try {
+            if (!sessionState.paused) {
+                subscribeToStream(sessionId, participantId);
+                interaction.client.sessionManager.chunkStream(sessionId, participantId);
+                await sessionState.originalInteraction.followUp({
+                    content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript.`,
+                });
+            } else {
+                await sessionState.originalInteraction.followUp({
+                    content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript, but recording is paused.`,
+                });
+            }
+        } catch (err) {
+            logger.error(COMPONENT, 'participant_accept_failed', 'Subscribe, chunkStream, or followUp failed', {
+                sessionId,
+                participantId,
+                errorClass: 'ParticipantRegistrationFailed',
+                innerErrorClass: err?.constructor?.name || 'Error',
+                message: err?.message,
             });
-        } else {
-            await sessionState.originalInteraction.followUp({
-                content: `<@${participantId}> has accepted the disclaimer and is included in the meeting's transcript, but recording is paused.`,
-            });
+            return false;
         }
-
         return true;
     }
 
@@ -333,17 +346,20 @@ function createBotCoordinator(sessionStore) {
             sessionStore.deleteSession(sessionId);
             return true;
         } catch (error) {
+            const closeErrorClass = error.closeErrorClass || 'CloseSessionFailed';
             logger.error(COMPONENT, 'session_close_failed', 'Close meeting failed', {
                 sessionId,
-                errorClass: error.constructor?.name || 'Error',
+                errorClass: closeErrorClass,
+                innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
-            const closeErrorClass = error.closeErrorClass || 'CloseSessionFailed';
-            const failureMessage = closeErrorClass === 'SummaryGenerationFailed'
-                ? 'The meeting has ended. The report was saved, but the summary could not be generated. You can open the report file to read the transcript.'
-                : closeErrorClass === 'ReportGenerationFailed'
-                    ? 'The meeting has ended. The transcript was saved, but the report could not be generated.'
-                    : 'The meeting has ended. There was a problem closing the session; the transcript, report, or summary may be missing or incomplete.';
+            const failureMessage = closeErrorClass === 'EmptyTranscript'
+                ? 'The meeting has ended. The transcript could not be generated.'
+                : closeErrorClass === 'SummaryGenerationFailed'
+                    ? 'The meeting has ended. The report was saved, but the summary could not be generated. You can open the report file to read the transcript.'
+                    : closeErrorClass === 'ReportGenerationFailed'
+                        ? 'The meeting has ended. The transcript was saved, but the report could not be generated.'
+                        : 'The meeting has ended. There was a problem closing the session; the transcript, report, or summary may be missing or incomplete.';
             await sessionState.originalInteraction.followUp({ content: failureMessage }).catch(() => {});
             sessionStore.deleteSession(sessionId);
             return false;
@@ -368,8 +384,8 @@ function createBotCoordinator(sessionStore) {
         try {
             switch (interaction.customId) {
                 case 'disclaimer-accept':
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     if (!sessionState.participantIds.includes(userId) && !sessionState.rejectedIds.includes(userId)) {
+                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                         if (await registerParticipant(messageId, userId, interaction)) {
                             await interaction.editReply({
                                 content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
@@ -382,20 +398,20 @@ function createBotCoordinator(sessionStore) {
                             break;
                         }
                     }
-                
-                    else {await interaction.deferUpdate(); break;}
+                    await interaction.deferUpdate();
+                    break;
 
                 case 'disclaimer-reject':
-                    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                     if (!sessionState.participantIds.includes(userId) && !sessionState.rejectedIds.includes(userId)) {
+                        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
                         sessionState.rejectedIds.push(userId);
-                        await interaction.reply({
+                        await interaction.editReply({
                             content: 'Disclaimer rejected. You are not a participant in the meeting and will not be recorded.',
-                            flags: MessageFlags.Ephemeral,
                         });
                         break;
                     }
-                    else {await interaction.deferUpdate(); break;}
+                    await interaction.deferUpdate();
+                    break;
             
                 case 'close-meeting-confirm':
                     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -417,6 +433,13 @@ function createBotCoordinator(sessionStore) {
                     break;
             }
         } catch (error) {
+            logger.error(COMPONENT, 'button_interaction_failed', 'Button interaction threw', {
+                customId: interaction?.customId,
+                errorClass: 'ButtonInteractionFailed',
+                innerErrorClass: error?.constructor?.name || 'Error',
+                message: error?.message,
+                code: error?.code,
+            });
             await interactionErrorHelper(interaction, 'An error occurred while handling the button interaction.');
         }
     }
@@ -452,8 +475,10 @@ function createBotCoordinator(sessionStore) {
                         });
                     }
                     catch (error) {
-                        logger.error(COMPONENT, 'session_close_failed', 'Error following up on session timeout', {
-                            errorClass: error.constructor?.name || 'Error',
+                        logger.error(COMPONENT, 'session_start_failed', 'Error following up on session timeout', {
+                            sessionId,
+                            errorClass: 'SessionTimeoutFollowUpFailed',
+                            innerErrorClass: error.constructor?.name || 'Error',
                             message: error.message,
                         });
                         return false;
@@ -479,7 +504,7 @@ function createBotCoordinator(sessionStore) {
             logger.error(COMPONENT, 'session_start_failed', 'Error starting meeting', {
                 guildId: interaction.guild?.id ?? null,
                 channelId: voiceChannel?.id ?? null,
-                errorClass: 'StartSessionFailed',
+                errorClass: 'StartMeetingFailed',
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
@@ -639,6 +664,8 @@ function createBotCoordinator(sessionStore) {
             return;
         }
 
+        if (user?.bot) return;
+
         if (!sessionState.dmIds.includes(userId)) {
             if (user) {
                 try {
@@ -688,7 +715,8 @@ function createBotCoordinator(sessionStore) {
                 logger.error(COMPONENT, 'session_close_failed', 'Failed to delete confirm message', {
                     sessionId,
                     messageId: confirmMessage.id,
-                    errorClass: err.constructor?.name || 'Error',
+                    errorClass: 'CloseMeetingFailed',
+                    innerErrorClass: err.constructor?.name || 'Error',
                     message: err.message,
                 });
             }
@@ -713,9 +741,11 @@ function createBotCoordinator(sessionStore) {
             }
             return true;
         } catch (error) {
+            const closeErrorClass = error.closeErrorClass || 'CloseSessionFailed';
             logger.error(COMPONENT, 'session_close_failed', 'Auto close meeting failed', {
                 sessionId,
-                errorClass: error.constructor?.name || 'Error',
+                errorClass: closeErrorClass,
+                innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
             return false;
