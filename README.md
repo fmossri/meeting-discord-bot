@@ -24,7 +24,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Transcript worker (Node.js)
 
-- Per-transcript queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting/session (metadata header at start, segments and optional gap markers). On close, the worker orders all lines by chunk and time so the report shows a timeline; if a chunk failed STT or never reached the worker, a gap line is written so the reader sees where content is missing. API: `startTranscript(transcriptId, meetingStartTimeMs)`, `enqueueChunk(transcriptId, chunk)`, `closeTranscript(transcriptId, { channelId, participantDisplayNames, closure })`.
+- Per-transcript queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting/session (metadata header at start, segments and optional gap markers). On close, the worker orders all lines by time then chunk so the report shows a chronological timeline; if a chunk failed STT or never reached the worker, a gap line is written so the reader sees where content is missing. API: `startTranscript(transcriptId, meetingStartTimeMs)`, `enqueueChunk(transcriptId, chunk)`, `closeTranscript(transcriptId, { channelId, participantDisplayNames, closure })`.
 - Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-transcript`**, **`/enqueue-chunk`**, **`/close-transcript`**. The bot typically uses the worker in-process via `createTranscriptWorker`.
 
 ### Observability (logs + in-process metrics)
