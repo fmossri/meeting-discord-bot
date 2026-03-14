@@ -13,6 +13,7 @@ const mockJoinVoiceChannel = jest.fn();
 const mockReceiverSubscribe = jest.fn();
 const mockConnection = {
 	destroy: jest.fn(),
+	on: jest.fn(), // connectToChannel calls voiceConnection.on('error', ...)
 	receiver: {
 		subscribe: jest.fn().mockReturnValue({
 			on: jest.fn(),
@@ -27,12 +28,13 @@ const mockConnection = {
 
 jest.mock('@discordjs/voice', () => ({
 	joinVoiceChannel: (...args) => mockJoinVoiceChannel(...args),
-	EndBehaviorType: { AfterSilence: 0 },
+	EndBehaviorType: { AfterSilence: 0, Manual: 1 },
 }));
 
 jest.mock('prism-media', () => ({
 	opus: {
-		Decoder: jest.fn().mockImplementation(() => ({})),
+		// Coordinator calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
+		Decoder: jest.fn().mockImplementation(() => ({ on: jest.fn() })),
 	},
 }));
 
@@ -294,7 +296,7 @@ describe('meeting flow integration', () => {
 
 		expect(confirmInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
-				content: 'An error occurred while closing the meeting.',
+				content: 'The meeting has ended. See the message above for details.',
 			})
 		);
 	});
@@ -303,15 +305,26 @@ describe('meeting flow integration', () => {
 		jest.useRealTimers();
 		try {
 			const mockFetch = jest.fn();
-			let fetchCallCount = 0;
-			mockFetch.mockImplementation(() => {
-				fetchCallCount++;
-				if (fetchCallCount <= 3) {
+			let transcribeCallCount = 0;
+			mockFetch.mockImplementation((url) => {
+				// Worker calls /health first (waitForSttReady); must return ready so processing can start.
+				if (String(url).endsWith('/health')) {
+					return Promise.resolve({
+						status: 200,
+						json: () => Promise.resolve({ ready: true }),
+					});
+				}
+				transcribeCallCount++;
+				if (transcribeCallCount <= 3) {
 					return Promise.resolve({ status: 500, statusText: 'Internal Server Error' });
 				}
+				// Return at least one segment so closeTranscript hasSegments passes and close succeeds.
 				return Promise.resolve({
 					status: 200,
-					json: () => Promise.resolve({ chunkId: 1, segments: [] }),
+					json: () => Promise.resolve({
+						chunkId: transcribeCallCount,
+						segments: [{ text: 'ok', startMs: 0, endMs: 100 }],
+					}),
 				});
 			});
 
@@ -352,7 +365,8 @@ describe('meeting flow integration', () => {
 
 			await new Promise((r) => setTimeout(r, 1000));
 
-			expect(mockFetch.mock.calls.length).toBeGreaterThanOrEqual(3);
+			const transcribeCalls = mockFetch.mock.calls.filter((call) => String(call[0]).endsWith('/transcribe'));
+			expect(transcribeCalls.length).toBeGreaterThanOrEqual(3);
 
 			const closeInt = createCloseInteraction(client, sessionId);
 			await coordinator.closeMeeting(sessionId, closeInt);
