@@ -8,7 +8,7 @@ const { createSessionManager } = require('./services/session-manager/session-man
 const { getTranscriptWorker } = require('./services/transcript-worker/get-transcript-worker.js');
 const { createReportGenerator } = require('./services/report-generator/report-generator.js');
 const { createSummaryGenerator } = require('./services/report-generator/summary-generator.js');
-const { createBotCoordinator } = require('./coordinator/bot-coordinator.js');
+const { createMeetingController } = require('./controller/meeting-controller.js');
 
 const token = config.discordToken;
 
@@ -34,7 +34,7 @@ client.on('raw', (packet) => {
   });
 */
 client.sessionStore = sessionStore;
-client.botCoordinator = createBotCoordinator(config.coordinatorConfig, sessionStore);
+client.meetingController = createMeetingController(config.controllerConfig, sessionStore);
 
 const transcriptWorker = getTranscriptWorker({
     workerConfig: config.workerConfig,

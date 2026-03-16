@@ -32,7 +32,7 @@ module.exports = {
         try {
             if (sessionState.started && !sessionState.paused) {
                 await interaction.deferReply();
-                await interaction.client.botCoordinator.pauseMeeting(sessionId);
+                await interaction.client.meetingController.pauseMeeting(sessionId);
                 await interaction.deleteReply();
             } else {
                 await interaction.reply({

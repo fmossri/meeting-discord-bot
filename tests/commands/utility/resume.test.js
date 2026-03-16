@@ -10,24 +10,24 @@ function createMockInteraction(overrides = {}) {
 		channelHasSession: jest.fn().mockReturnValue(false),
 		getSessionByChannelId: jest.fn().mockReturnValue(null),
 	};
-	const botCoordinator = {
+	const meetingController = {
 		resumeMeeting: jest.fn().mockResolvedValue(true),
 	};
 	const interaction = {
 		member: { user: { id: 'user-1' }, voice: { channel: { id: 'voice-123' } } },
-		client: { sessionStore, botCoordinator },
+		client: { sessionStore, meetingController },
 		reply,
 		deferReply,
 		deleteReply,
 		editReply,
 		...overrides,
 	};
-	return { interaction, reply, deferReply, deleteReply, editReply, sessionStore, botCoordinator };
+	return { interaction, reply, deferReply, deleteReply, editReply, sessionStore, meetingController };
 }
 
 describe('/resume', () => {
 	it('replies with "Must be connected" when member has no voice channel', async () => {
-		const { interaction, reply, botCoordinator } = createMockInteraction({
+		const { interaction, reply, meetingController } = createMockInteraction({
 			member: { user: { id: 'user-1' }, voice: { channel: null } },
 		});
 
@@ -37,11 +37,11 @@ describe('/resume', () => {
 			content: "Must be connected to the meeting's voice channel.",
 			flags: MessageFlags.Ephemeral,
 		});
-		expect(botCoordinator.resumeMeeting).not.toHaveBeenCalled();
+		expect(meetingController.resumeMeeting).not.toHaveBeenCalled();
 	});
 
 	it('replies with "No meeting is in progress" when channel has no session', async () => {
-		const { interaction, reply, sessionStore, botCoordinator } = createMockInteraction();
+		const { interaction, reply, sessionStore, meetingController } = createMockInteraction();
 		sessionStore.channelHasSession.mockReturnValue(false);
 
 		await resumeCommand.execute(interaction);
@@ -50,11 +50,11 @@ describe('/resume', () => {
 			content: 'No meeting is in progress in this channel.',
 			flags: MessageFlags.Ephemeral,
 		});
-		expect(botCoordinator.resumeMeeting).not.toHaveBeenCalled();
+		expect(meetingController.resumeMeeting).not.toHaveBeenCalled();
 	});
 
 	it('replies with "You are not a participant" when user not in participantIds', async () => {
-		const { interaction, reply, sessionStore, botCoordinator } = createMockInteraction();
+		const { interaction, reply, sessionStore, meetingController } = createMockInteraction();
 		sessionStore.channelHasSession.mockReturnValue(true);
 		sessionStore.getSessionByChannelId.mockReturnValue({
 			sessionId: 'session-1',
@@ -67,11 +67,11 @@ describe('/resume', () => {
 			content: 'You are not a participant in this meeting.',
 			flags: MessageFlags.Ephemeral,
 		});
-		expect(botCoordinator.resumeMeeting).not.toHaveBeenCalled();
+		expect(meetingController.resumeMeeting).not.toHaveBeenCalled();
 	});
 
 	it('replies with "Meeting recording is not paused" when not started or not paused', async () => {
-		const { interaction, reply, sessionStore, botCoordinator } = createMockInteraction();
+		const { interaction, reply, sessionStore, meetingController } = createMockInteraction();
 		sessionStore.channelHasSession.mockReturnValue(true);
 		sessionStore.getSessionByChannelId.mockReturnValue({
 			sessionId: 'session-1',
@@ -84,40 +84,40 @@ describe('/resume', () => {
 			content: 'Meeting recording is not paused.',
 			flags: MessageFlags.Ephemeral,
 		});
-		expect(botCoordinator.resumeMeeting).not.toHaveBeenCalled();
+		expect(meetingController.resumeMeeting).not.toHaveBeenCalled();
 	});
 
 	it('deferReply, calls resumeMeeting(sessionId), deleteReply when resumeMeeting returns true', async () => {
-		const { interaction, reply, deferReply, deleteReply, editReply, sessionStore, botCoordinator } = createMockInteraction();
+		const { interaction, reply, deferReply, deleteReply, editReply, sessionStore, meetingController } = createMockInteraction();
 		sessionStore.channelHasSession.mockReturnValue(true);
 		sessionStore.getSessionByChannelId.mockReturnValue({
 			sessionId: 'session-1',
 			sessionState: { participantIds: ['user-1'], started: true, paused: true },
 		});
-		botCoordinator.resumeMeeting.mockResolvedValue(true);
+		meetingController.resumeMeeting.mockResolvedValue(true);
 
 		await resumeCommand.execute(interaction);
 
 		expect(deferReply).toHaveBeenCalledTimes(1);
-		expect(botCoordinator.resumeMeeting).toHaveBeenCalledWith('session-1');
+		expect(meetingController.resumeMeeting).toHaveBeenCalledWith('session-1');
 		expect(deleteReply).toHaveBeenCalledTimes(1);
 		expect(editReply).not.toHaveBeenCalled();
 		expect(reply).not.toHaveBeenCalled();
 	});
 
 	it('deferReply, editReply with failure message when resumeMeeting returns false', async () => {
-		const { interaction, reply, deferReply, deleteReply, editReply, sessionStore, botCoordinator } = createMockInteraction();
+		const { interaction, reply, deferReply, deleteReply, editReply, sessionStore, meetingController } = createMockInteraction();
 		sessionStore.channelHasSession.mockReturnValue(true);
 		sessionStore.getSessionByChannelId.mockReturnValue({
 			sessionId: 'session-1',
 			sessionState: { participantIds: ['user-1'], started: true, paused: true },
 		});
-		botCoordinator.resumeMeeting.mockResolvedValue(false);
+		meetingController.resumeMeeting.mockResolvedValue(false);
 
 		await resumeCommand.execute(interaction);
 
 		expect(deferReply).toHaveBeenCalledTimes(1);
-		expect(botCoordinator.resumeMeeting).toHaveBeenCalledWith('session-1');
+		expect(meetingController.resumeMeeting).toHaveBeenCalledWith('session-1');
 		expect(editReply).toHaveBeenCalledWith({
 			content: 'Failed to resume the meeting recording.',
 			flags: MessageFlags.Ephemeral,

@@ -5,7 +5,7 @@ function createMockClient(overrides = {}) {
 		sessionStore: {
 			getSessionByChannelId: jest.fn().mockReturnValue(null),
 		},
-		botCoordinator: {
+		meetingController: {
 			handleUserJoinedMeetingChannel: jest.fn().mockResolvedValue(undefined),
 		},
 		users: {
@@ -30,7 +30,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn();
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 		});
 		const newState = createMockNewState({ channelId: null });
 
@@ -45,7 +45,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn();
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 		});
 		const newState = createMockNewState();
 
@@ -64,7 +64,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn().mockResolvedValue(undefined);
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 		});
 		const newState = createMockNewState({
 			id: 'late-joiner',
@@ -85,7 +85,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn().mockResolvedValue(undefined);
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 			users: { fetch: jest.fn().mockResolvedValue(null) },
 		});
 		const newState = createMockNewState({ id: 'late-joiner', member: null });
@@ -103,7 +103,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn().mockResolvedValue(undefined);
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 			users: { fetch: jest.fn().mockResolvedValue(mockUser) },
 		});
 		const newState = createMockNewState({ id: 'user-456', member: null });
@@ -119,7 +119,7 @@ describe('VoiceStateUpdate', () => {
 		const handleUserJoinedMeetingChannel = jest.fn();
 		const client = createMockClient({
 			sessionStore: { getSessionByChannelId },
-			botCoordinator: { handleUserJoinedMeetingChannel },
+			meetingController: { handleUserJoinedMeetingChannel },
 		});
 		const oldState = createMockNewState({ channelId: 'channel-123' });
 		const newState = createMockNewState({ channelId: 'channel-123' });

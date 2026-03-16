@@ -29,7 +29,7 @@ beforeEach(() => {
 		on: jest.fn(),
 		pipe: jest.fn().mockReturnValue({}),
 	});
-	// Coordinator calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
+	// Controller calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
 	mockDecoder.mockReturnValue({ on: jest.fn() });
 });
 
@@ -42,9 +42,9 @@ afterAll(() => {
 	jest.useRealTimers();
 });
 
-const { createBotCoordinator } = require('../../coordinator/bot-coordinator.js');
+const { createMeetingController } = require('../../controller/meeting-controller.js');
 
-const DEFAULT_COORDINATOR_CONFIG = {
+const DEFAULT_CONTROLLER_CONFIG = {
 	meetingTimeouts: {
 		explicitPauseMs: 30 * 60 * 1000,
 		pausedEmptyRoomMs: 15 * 60 * 1000,
@@ -89,18 +89,18 @@ function createMockInteraction(overrides = {}) {
 	};
 }
 
-describe('Bot Coordinator', () => {
+describe('Meeting Controller', () => {
 	describe('startMeeting', () => {
 		it('replies with disclaimer and buttons, creates session in store with correct shape, returns true', async () => {
 			const sessionStore = createMockSessionStore();
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction();
 			// startMeeting awaits interaction.reply() then calls .fetch() on the result; must return object with fetch
 			interaction.reply.mockResolvedValue({
 				fetch: jest.fn().mockResolvedValue({ id: 'reply-msg-id' }),
 			});
 
-			const result = await coordinator.startMeeting(interaction);
+			const result = await controller.startMeeting(interaction);
 
 			expect(result).toBe(true);
 			expect(interaction.reply).toHaveBeenCalledWith(
@@ -127,12 +127,12 @@ describe('Bot Coordinator', () => {
 	describe('closeMeeting', () => {
 		it('returns false when session does not exist (sessionState is null)', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: 'confirm-msg-id', delete: jest.fn().mockResolvedValue(undefined) }),
 			});
 
-			const result = await coordinator.closeMeeting('session-1', interaction);
+			const result = await controller.closeMeeting('session-1', interaction);
 
 			expect(result).toBe(false);
 		});
@@ -140,12 +140,12 @@ describe('Bot Coordinator', () => {
 		it('calls editReply with confirm message and stores confirm mapping when session exists', async () => {
 			const sessionState = { timeouts: { uiTimeoutId: null, pauseTimeoutId: null } };
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: 'confirm-123', delete: jest.fn().mockResolvedValue(undefined) }),
 			});
 
-			await coordinator.closeMeeting('session-1', interaction);
+			await controller.closeMeeting('session-1', interaction);
 
 			expect(interaction.editReply).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -160,9 +160,9 @@ describe('Bot Coordinator', () => {
 	describe('reconnectParticipant', () => {
 		it('returns false when session is not found', () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = coordinator.reconnectParticipant('session-1', 'user-1');
+			const result = controller.reconnectParticipant('session-1', 'user-1');
 
 			expect(result).toBe(false);
 		});
@@ -173,9 +173,9 @@ describe('Bot Coordinator', () => {
 				originalInteraction: { client: { sessionManager: { chunkStream: jest.fn() } } },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = coordinator.reconnectParticipant('session-1', 'user-1');
+			const result = controller.reconnectParticipant('session-1', 'user-1');
 
 			expect(result).toBe(false);
 			expect(sessionState.originalInteraction.client.sessionManager.chunkStream).not.toHaveBeenCalled();
@@ -201,9 +201,9 @@ describe('Bot Coordinator', () => {
 				originalInteraction: { client: { sessionManager: { chunkStream: chunkStreamMock } } },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = coordinator.reconnectParticipant('session-1', 'user-1');
+			const result = controller.reconnectParticipant('session-1', 'user-1');
 
 			expect(result).toBe(true);
 			expect(chunkStreamMock).toHaveBeenCalledWith('session-1', 'user-1');
@@ -226,9 +226,9 @@ describe('Bot Coordinator', () => {
 				timeouts: { uiTimeoutId: null, pauseTimeoutId: null },
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			await coordinator.pauseMeeting('session-1');
+			await controller.pauseMeeting('session-1');
 
 			expect(sessionState.paused).toBe(true);
 			expect(sessionState.timeouts.pauseTimeoutId).not.toBeNull();
@@ -260,9 +260,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.resumeMeeting('session-1');
+			const result = await controller.resumeMeeting('session-1');
 
 			expect(result).toBe(true);
 			expect(sessionState.paused).toBe(false);
@@ -288,9 +288,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.resumeMeeting('session-1');
+			const result = await controller.resumeMeeting('session-1');
 			expect(result).toBe(false);
 		});
 
@@ -307,9 +307,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.resumeMeeting('session-1');
+			const result = await controller.resumeMeeting('session-1');
 
 			expect(result).toBe(false);
 		});
@@ -329,9 +329,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.resumeMeeting('session-1');
+			const result = await controller.resumeMeeting('session-1');
 			expect(result).toBe(false);
 		});
 	});
@@ -339,10 +339,10 @@ describe('Bot Coordinator', () => {
 	describe('handleButtonInteraction', () => {
 		it('calls deferUpdate and returns when no session for message', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({ message: { id: 'unknown-msg' } });
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
 			expect(interaction.reply).not.toHaveBeenCalled();
@@ -362,7 +362,7 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockReturnValue(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456', displayName: 'Alice' },
@@ -370,7 +370,7 @@ describe('Bot Coordinator', () => {
 			});
 			interaction.client.sessionManager.startSession.mockResolvedValue(true);
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
 			expect(interaction.editReply).toHaveBeenCalledWith({
@@ -385,14 +385,14 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
 				customId: 'disclaimer-accept',
 			});
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
 			expect(interaction.reply).not.toHaveBeenCalledWith(
@@ -407,14 +407,14 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
 				customId: 'disclaimer-reject',
 			});
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(sessionState.rejectedIds).toContain('user-456');
 			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
@@ -430,14 +430,14 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				user: { id: 'user-456' },
 				customId: 'disclaimer-reject',
 			});
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
 			expect(interaction.reply).not.toHaveBeenCalledWith(
@@ -464,19 +464,19 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore();
 			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
 			const closeInteraction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: confirmMessageId, delete: jest.fn().mockResolvedValue(undefined) }),
 			});
-			await coordinator.closeMeeting(sessionId, closeInteraction);
+			await controller.closeMeeting(sessionId, closeInteraction);
 
 			const interaction = createMockInteraction({
 				message: { id: confirmMessageId },
 				customId: 'close-meeting-confirm',
 			});
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferReply).toHaveBeenCalledWith({ flags: MessageFlags.Ephemeral });
 			expect(closeSessionMock).toHaveBeenCalledWith(
@@ -508,11 +508,11 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockImplementation((id) => (id === sessionId ? sessionState : null));
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const closeInteraction = createMockInteraction({
 				editReply: jest.fn().mockResolvedValue({ id: confirmMessageId, delete: jest.fn().mockResolvedValue(undefined) }),
 			});
-			await coordinator.closeMeeting(sessionId, closeInteraction);
+			await controller.closeMeeting(sessionId, closeInteraction);
 
 			const interaction = createMockInteraction({
 				message: { id: confirmMessageId },
@@ -522,7 +522,7 @@ describe('Bot Coordinator', () => {
 			});
 			interaction.followUp = jest.fn().mockResolvedValue(undefined);
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.followUp).toHaveBeenCalledWith({
 				content: 'The meeting has ended. See the message above for details.',
@@ -538,13 +538,13 @@ describe('Bot Coordinator', () => {
 				participantStates: new Map(),
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 			const interaction = createMockInteraction({
 				message: { id: 'msg-789' },
 				customId: 'unknown-button',
 			});
 
-			await coordinator.handleButtonInteraction(interaction);
+			await controller.handleButtonInteraction(interaction);
 
 			expect(interaction.deferUpdate).toHaveBeenCalledTimes(1);
 			expect(interaction.reply).not.toHaveBeenCalled();
@@ -554,9 +554,9 @@ describe('Bot Coordinator', () => {
 	describe('autoCloseMeeting', () => {
 		it('returns false when session not found', async () => {
 			const sessionStore = createMockSessionStore(null);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.autoCloseMeeting('session-1');
+			const result = await controller.autoCloseMeeting('session-1');
 
 			expect(result).toBe(false);
 			expect(sessionStore.deleteSession).not.toHaveBeenCalled();
@@ -578,9 +578,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.autoCloseMeeting('session-1');
+			const result = await controller.autoCloseMeeting('session-1');
 
 			expect(result).toBe(true);
 			expect(closeSessionMock).toHaveBeenCalledWith(
@@ -607,9 +607,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.autoCloseMeeting('session-1');
+			const result = await controller.autoCloseMeeting('session-1');
 
 			expect(result).toBe(false);
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
@@ -630,9 +630,9 @@ describe('Bot Coordinator', () => {
 				},
 			};
 			const sessionStore = createMockSessionStore(sessionState);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.autoCloseMeeting('session-1');
+			const result = await controller.autoCloseMeeting('session-1');
 
 			expect(result).toBe(false);
 			expect(sessionStore.deleteSession).toHaveBeenCalledWith('session-1');
@@ -652,9 +652,9 @@ describe('Bot Coordinator', () => {
 			};
 			const sessionStore = createMockSessionStore(sessionState);
 			sessionStore.getSessionById.mockReturnValueOnce(sessionState).mockReturnValueOnce(null);
-			const coordinator = createBotCoordinator(DEFAULT_COORDINATOR_CONFIG, sessionStore);
+			const controller = createMeetingController(DEFAULT_CONTROLLER_CONFIG, sessionStore);
 
-			const result = await coordinator.autoCloseMeeting('session-1');
+			const result = await controller.autoCloseMeeting('session-1');
 
 			expect(result).toBe(false);
 			expect(sessionStore.deleteSession).not.toHaveBeenCalled();

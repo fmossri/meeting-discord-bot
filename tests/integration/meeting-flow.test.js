@@ -8,9 +8,9 @@ const path = require('node:path');
 const os = require('node:os');
 const { sessionStore } = require('../../session.js');
 const { createSessionManager } = require('../../services/session-manager/session-manager.js');
-const { createBotCoordinator } = require('../../coordinator/bot-coordinator.js');
+const { createMeetingController } = require('../../controller/meeting-controller.js');
 const { createTranscriptWorker } = require('../../services/transcript-worker/transcript-worker.js');
-const { convertPCMToWav } = require('../../services/session-manager/convert-pcm-to-wav.js');
+const { convertPCMToWav } = require('../../utils/convert-pcm-to-wav.js');
 
 const mockJoinVoiceChannel = jest.fn();
 const mockReceiverSubscribe = jest.fn();
@@ -36,7 +36,7 @@ jest.mock('@discordjs/voice', () => ({
 
 jest.mock('prism-media', () => ({
 	opus: {
-		// Coordinator calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
+		// Controller calls decoder.on('error', ...); mock must expose .on so subscribeToStream does not throw.
 		Decoder: jest.fn().mockImplementation(() => ({ on: jest.fn() })),
 	},
 }));
@@ -83,7 +83,7 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 		...sessionManagerOverrides,
 	});
 
-	const coordinator = createBotCoordinator({ meetingTimeouts: {
+	const controller = createMeetingController({ meetingTimeouts: {
 		explicitPauseMs: 30 * 60 * 1000,
 		pausedEmptyRoomMs: 15 * 60 * 1000,
 		emptyRoomMs: 5 * 60 * 1000,
@@ -93,10 +93,10 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 	const client = {
 		sessionStore,
 		sessionManager,
-		botCoordinator: coordinator,
+		meetingController: controller,
 	};
 
-	return { client, coordinator, sessionManager, mockWorker, mockReportGen, mockSummaryGen };
+	return { client, controller, sessionManager, mockWorker, mockReportGen, mockSummaryGen };
 }
 
 function createStartInteraction(client, sessionId = 'session-1') {
@@ -183,16 +183,16 @@ afterAll(() => {
 
 describe('meeting flow integration', () => {
 	it('happy path: start → accept → close → confirm → summary posted', async () => {
-		const { client, coordinator } = createClientWithMocks();
+		const { client, controller } = createClientWithMocks();
 		const sessionId = 'session-1';
 
 		const startInt = createStartInteraction(client, sessionId);
-		const started = await coordinator.startMeeting(startInt);
+		const started = await controller.startMeeting(startInt);
 		expect(started).toBe(true);
 		expect(sessionStore.getSessionById(sessionId)).toBeDefined();
 
 		const acceptInt = createAcceptInteraction(client, sessionId);
-		await coordinator.handleButtonInteraction(acceptInt);
+		await controller.handleButtonInteraction(acceptInt);
 		expect(acceptInt.editReply).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.',
@@ -200,10 +200,10 @@ describe('meeting flow integration', () => {
 		);
 
 		const closeInt = createCloseInteraction(client, sessionId);
-		await coordinator.closeMeeting(sessionId, closeInt);
+		await controller.closeMeeting(sessionId, closeInt);
 
 		const confirmInt = createConfirmInteraction(client);
-		await coordinator.handleButtonInteraction(confirmInt);
+		await controller.handleButtonInteraction(confirmInt);
 		expect(startInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
 				content: expect.stringContaining(summaryText),
@@ -212,7 +212,7 @@ describe('meeting flow integration', () => {
 	});
 
 	it('pause and resume: start → accept → pause → resume → close → summary', async () => {
-		const { client, coordinator } = createClientWithMocks();
+		const { client, controller } = createClientWithMocks();
 		const sessionId = 'session-1';
 
 		const voiceChannelWithMembers = {
@@ -222,26 +222,26 @@ describe('meeting flow integration', () => {
 		const startInt = createStartInteraction(client, sessionId);
 		startInt.guild.channels.fetch = jest.fn().mockResolvedValue(voiceChannelWithMembers);
 
-		await coordinator.startMeeting(startInt);
+		await controller.startMeeting(startInt);
 		const acceptInt = createAcceptInteraction(client, sessionId);
-		await coordinator.handleButtonInteraction(acceptInt);
+		await controller.handleButtonInteraction(acceptInt);
 		expect(acceptInt.editReply).toHaveBeenCalledWith(
 			expect.objectContaining({ content: 'Disclaimer accepted. You are now a participant in the meeting and being recorded.' })
 		);
 
-		await coordinator.pauseMeeting(sessionId);
+		await controller.pauseMeeting(sessionId);
 		expect(sessionStore.getSessionById(sessionId).paused).toBe(true);
 
-		await coordinator.resumeMeeting(sessionId);
+		await controller.resumeMeeting(sessionId);
 		expect(startInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({ content: 'Meeting recording resumed.' })
 		);
 		expect(sessionStore.getSessionById(sessionId).paused).toBe(false);
 
 		const closeInt = createCloseInteraction(client, sessionId);
-		await coordinator.closeMeeting(sessionId, closeInt);
+		await controller.closeMeeting(sessionId, closeInt);
 		const confirmInt = createConfirmInteraction(client);
-		await coordinator.handleButtonInteraction(confirmInt);
+		await controller.handleButtonInteraction(confirmInt);
 		expect(startInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({ content: expect.stringContaining(summaryText) })
 		);
@@ -260,20 +260,20 @@ describe('meeting flow integration', () => {
 			transcriptWorker: mockWorker,
 			managerConfig: { maxRetries: 3 },
 		});
-		const coordinator = createBotCoordinator({ meetingTimeouts: {
+		const controller = createMeetingController({ meetingTimeouts: {
 			explicitPauseMs: 30 * 60 * 1000,
 			pausedEmptyRoomMs: 15 * 60 * 1000,
 			emptyRoomMs: 5 * 60 * 1000,
 			uiTimeoutMs: 60 * 1000,
 		}}, sessionStore);
-		const client = { sessionStore, sessionManager, botCoordinator: coordinator };
+		const client = { sessionStore, sessionManager, meetingController: controller };
 
 		const sessionId = 'session-1';
 		const startInt = createStartInteraction(client, sessionId);
-		await coordinator.startMeeting(startInt);
+		await controller.startMeeting(startInt);
 
 		const acceptInt = createAcceptInteraction(client, sessionId);
-		await coordinator.handleButtonInteraction(acceptInt);
+		await controller.handleButtonInteraction(acceptInt);
 
 		expect(acceptInt.editReply).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -295,25 +295,25 @@ describe('meeting flow integration', () => {
 			transcriptWorker: mockWorker,
 			managerConfig: { maxRetries: 3 },
 		});
-		const coordinator = createBotCoordinator({ meetingTimeouts: {
+		const controller = createMeetingController({ meetingTimeouts: {
 			explicitPauseMs: 30 * 60 * 1000,
 			pausedEmptyRoomMs: 15 * 60 * 1000,
 			emptyRoomMs: 5 * 60 * 1000,
 			uiTimeoutMs: 60 * 1000,
 		}}, sessionStore);
-		const client = { sessionStore, sessionManager, botCoordinator: coordinator };
+		const client = { sessionStore, sessionManager, meetingController: controller };
 
 		const sessionId = 'session-1';
 		const startInt = createStartInteraction(client, sessionId);
-		await coordinator.startMeeting(startInt);
+		await controller.startMeeting(startInt);
 		const acceptInt = createAcceptInteraction(client, sessionId);
-		await coordinator.handleButtonInteraction(acceptInt);
+		await controller.handleButtonInteraction(acceptInt);
 
 		const closeInt = createCloseInteraction(client, sessionId);
-		await coordinator.closeMeeting(sessionId, closeInt);
+		await controller.closeMeeting(sessionId, closeInt);
 
 		const confirmInt = createConfirmInteraction(client);
-		await coordinator.handleButtonInteraction(confirmInt);
+		await controller.handleButtonInteraction(confirmInt);
 
 		expect(confirmInt.followUp).toHaveBeenCalledWith(
 			expect.objectContaining({
@@ -371,19 +371,19 @@ describe('meeting flow integration', () => {
 				transcriptWorker: worker,
 				managerConfig: { maxRetries: 3 },
 			});
-			const coordinator = createBotCoordinator({ meetingTimeouts: {
+			const controller = createMeetingController({ meetingTimeouts: {
 				explicitPauseMs: 30 * 60 * 1000,
 				pausedEmptyRoomMs: 15 * 60 * 1000,
 				emptyRoomMs: 5 * 60 * 1000,
 				uiTimeoutMs: 60 * 1000,
 			}}, sessionStore);
-			const client = { sessionStore, sessionManager, botCoordinator: coordinator };
+			const client = { sessionStore, sessionManager, meetingController: controller };
 
 			const sessionId = 'session-1';
 			const startInt = createStartInteraction(client, sessionId);
-			await coordinator.startMeeting(startInt);
+			await controller.startMeeting(startInt);
 			const acceptInt = createAcceptInteraction(client, sessionId);
-			await coordinator.handleButtonInteraction(acceptInt);
+			await controller.handleButtonInteraction(acceptInt);
 
 			const wavBuffer = convertPCMToWav(Buffer.alloc(320), 16000);
 			// Enqueue 5 chunks so ensureProcessing is retriggered after each failed attempt (worker only retries when processing is kicked again).
@@ -402,9 +402,9 @@ describe('meeting flow integration', () => {
 			expect(transcribeCalls.length).toBeGreaterThanOrEqual(3);
 
 			const closeInt = createCloseInteraction(client, sessionId);
-			await coordinator.closeMeeting(sessionId, closeInt);
+			await controller.closeMeeting(sessionId, closeInt);
 			const confirmInt = createConfirmInteraction(client);
-			await coordinator.handleButtonInteraction(confirmInt);
+			await controller.handleButtonInteraction(confirmInt);
 			expect(startInt.followUp).toHaveBeenCalledWith(
 				expect.objectContaining({
 					content: expect.stringContaining(summaryText),

@@ -20,7 +20,7 @@ module.exports = {
 		}
 		else if (interaction.isButton()) {
 			try {
-				await interaction.client.botCoordinator.handleButtonInteraction(interaction);
+				await interaction.client.meetingController.handleButtonInteraction(interaction);
 			}
 			catch (error) {
 				await interactionErrorHelper(interaction, 'There was an error while handling this button.');

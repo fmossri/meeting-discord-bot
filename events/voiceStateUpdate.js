@@ -34,17 +34,17 @@ module.exports = {
             // Room empties and not paused -> pause meeting and auto-close after emptyRoomMs timeout
             try {
                 if (!sessionState.paused) {
-                    await client.botCoordinator.pauseMeeting(oldSession.sessionId);
+                    await client.meetingController.pauseMeeting(oldSession.sessionId);
                     clearTimeout(sessionState.timeouts.pauseTimeoutId);
                     sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
-                        await client.botCoordinator.autoCloseMeeting(oldSession.sessionId);
+                        await client.meetingController.autoCloseMeeting(oldSession.sessionId);
                     }, meetingTimeouts.emptyRoomMs);
 
                 // Room empties and paused -> auto-close after pausedEmptyRoomMs timeout
                 } else {
                     clearTimeout(sessionState.timeouts.pauseTimeoutId);
                     sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
-                        await client.botCoordinator.autoCloseMeeting(oldSession.sessionId);
+                        await client.meetingController.autoCloseMeeting(oldSession.sessionId);
                     }, meetingTimeouts.pausedEmptyRoomMs);
                 }
                 return;
@@ -62,6 +62,6 @@ module.exports = {
         }
         const userId = newState.id;
         const user = newState.member?.user ?? (await client.users.fetch(userId).catch(() => null));
-        await client.botCoordinator.handleUserJoinedMeetingChannel(newSession.sessionId, userId, { user });
+        await client.meetingController.handleUserJoinedMeetingChannel(newSession.sessionId, userId, { user });
 	},
 };

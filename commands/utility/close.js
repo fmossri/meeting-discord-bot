@@ -42,7 +42,7 @@ module.exports = {
 		}
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            await interaction.client.botCoordinator.closeMeeting(sessionId, interaction);
+            await interaction.client.meetingController.closeMeeting(sessionId, interaction);
         } catch (error) {
 			await interactionErrorHelper(interaction, 'An error occurred while closing the meeting.');
         }

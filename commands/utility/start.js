@@ -20,6 +20,6 @@ module.exports = {
 			});
 			return;
 		}
-		await interaction.client.botCoordinator.startMeeting(interaction);
+		await interaction.client.meetingController.startMeeting(interaction);
 	},
 };

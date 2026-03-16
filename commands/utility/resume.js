@@ -32,7 +32,7 @@ module.exports = {
         try {
             if (sessionState.started && sessionState.paused) {
                 await interaction.deferReply();
-                if (!(await interaction.client.botCoordinator.resumeMeeting(sessionId))) {
+                if (!(await interaction.client.meetingController.resumeMeeting(sessionId))) {
                     await interaction.editReply({
                         content: 'Failed to resume the meeting recording.',
                         flags: MessageFlags.Ephemeral,

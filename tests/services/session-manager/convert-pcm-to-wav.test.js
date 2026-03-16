@@ -1,5 +1,5 @@
 const wav = require('node-wav');
-const { convertPCMToWav } = require('../../../services/session-manager/convert-pcm-to-wav.js');
+const { convertPCMToWav } = require('../../../utils/convert-pcm-to-wav.js');
 
 describe('convertPCMToWav', () => {
     function makePCMBuffer(int16Samples) {

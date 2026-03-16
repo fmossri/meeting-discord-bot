@@ -15,7 +15,7 @@ A Discord bot that implements STT and summarization capabilities.
 - **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
 - **Auto-close on empty room** — If everyone leaves the voice channel without `/close`, the bot pauses and waits. After a configurable timeout with no one rejoining, it auto-closes the meeting and posts a message. Timeouts are set in `config/index.js` (explicit pause, paused-empty-room, empty-room, UI confirm).
-- Session state stored in memory (no database). A **coordinator** (`coordinator/bot-coordinator.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
+- Session state stored in memory (no database). A **controller** (`controller/meeting-controller.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
 
 ### STT wrapper (Python)
 
@@ -53,9 +53,9 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Flow
 
-After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio stream; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the coordinator posts it to Discord. If everyone leaves without closing, the bot auto-closes after a configured timeout.
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio stream; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the controller stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the controller posts it to Discord. If everyone leaves without closing, the bot auto-closes after a configured timeout.
 
-**Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
+**Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, controller, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
 
 ---
 
@@ -115,7 +115,6 @@ Copy `.env-example` to `.env` and set:
 | `DISCORD_TOKEN`          | Bot token (Developer Portal → Bot → Reset Token) |
 | `APP_ID`                 | Application ID (Developer Portal → General Information) |
 | `SERVER_ID`              | Optional. If set, `deploy-commands.js` registers slash commands in this guild only (instant). If unset, commands are registered globally (all servers; propagation can take up to 1 hour). |
-| `PUBLIC_KEY`             | Application public key (Developer Portal → General Information) |
 | `STT_MODEL_ID`           | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
 | `STT_DOWNLOAD_PATH`      | Where to download/cache models when using a size or HF repo (default `.models/`). Ignored when `STT_MODEL_ID` is a local path. First run may download. |
 | `STT_USE_LOCAL`          | Use only cached models, no network. Set to `true` after first download or for offline. |
@@ -202,7 +201,7 @@ Copy `.env-example` to `.env` and set:
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
 | `config/index.js` | Central configuration (worker and manager config, timeouts, LLM timeouts) |
-| `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
+| `controller/meeting-controller.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
@@ -214,7 +213,7 @@ Copy `.env-example` to `.env` and set:
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
 | `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
-| `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the coordinator wires), report and summary generation. Coordinator owns voice and capture. |
+| `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the controller wires), report and summary generation. Controller owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
 | `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |
