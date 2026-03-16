@@ -1,12 +1,32 @@
+require('dotenv').config();
 const { workerConfig } = require('../../config/index.js');
 const { createTranscriptWorker } = require('./transcript-worker');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 
+
+function requireBotAuth(req, res, next) {
+    const expected = workerConfig.workerAuthToken;
+    if (!expected) {
+      // Auth disabled (e.g. local dev) – allow all
+      return next();
+    }
+  
+    const provided = req.header('Internal-Worker-Auth');
+    if (provided !== expected) {
+      return res.status(401).json({ error: 'Unauthorized bot client' });
+    }
+  
+    return next();
+  }
+
+
 const app = express();
 
 app.use(express.json());
+app.use(requireBotAuth);
+
 
 const transcriptWorker = createTranscriptWorker({
 	workerConfig,

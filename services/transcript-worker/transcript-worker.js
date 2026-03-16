@@ -7,17 +7,25 @@ const COMPONENT = 'transcript-worker';
 function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 
     const { maxRetries: MAX_RETRIES, flushAfterProcessedChunks: FLUSH_AFTER_PROCESSED_CHUNKS } = workerConfig;
-	const { sttBaseUrl, workerTimeouts } = workerConfig;
+	const { sttBaseUrl, workerTimeouts, sttAuthToken } = workerConfig;
 	const transcriptsDir = workerConfig.transcriptsDir || pathImpl.join(__dirname, 'transcripts');
 	const transcriptsMap = new Map();
 	let sttReadyWaited = false;
+
+    function getSttHeaders(sttAuthToken) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (sttAuthToken) {
+            headers['internal-stt-auth'] = sttAuthToken;
+        }
+        return headers;
+    }
 
 	async function waitForSttReady() {
 		const deadline = Date.now() + workerTimeouts.sttReadyTimeoutMs;
 		const healthUrl = sttBaseUrl.replace(/\/$/, '') + '/health';
 		while (Date.now() < deadline) {
 			try {
-				const res = await fetchImpl(healthUrl);
+				const res = await fetchImpl(healthUrl, { headers: getSttHeaders(sttAuthToken) });
 				const body = await res.json();
 				if (body && body.ready === true) return;
 			} catch (_) { /* ignore */ }
@@ -327,9 +335,7 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 				try {
 					const response = await fetchWithTimeout(postUrl, {
 						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-						},
+						headers: getSttHeaders(sttAuthToken),
 						body: JSON.stringify({
 							transcriptId: transcriptId,
 							chunkId: chunk.chunkId,
@@ -342,6 +348,39 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 					countedCall = true;
 
 					if (response.status !== 200) {
+						const status = response.status;
+
+						// Auth failure from Wrapper: do not retry; log and abort by throwing.
+						if (status === 401 || status === 403) {
+							appMetrics.increment('stt_errors_total');
+							const errLatencyMs = Math.max(0, Date.now() - sttStartMs);
+							appMetrics.observe('stt_latency_ms', errLatencyMs);
+							if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
+
+							recordChunkFailure(transcriptId, chunk, {
+								statusCode: status,
+								retryCount: chunk.retryCount ?? 0,
+								errorClass: 'SttUnauthorized',
+								message: response.statusText || 'STT auth failed (Wrapper returned 401/403)',
+								queueWaitMs,
+							});
+
+							logger.error(COMPONENT, 'stt_response_failed', 'STT auth failed (Wrapper returned 401/403)', {
+								transcriptId,
+								chunkId: chunk.chunkId,
+								statusCode: status,
+								errorClass: 'SttUnauthorized',
+								retryCount: chunk.retryCount ?? 0,
+							});
+
+							// Abort processing; session-manager should surface this and abort the meeting.
+							const authError = new Error('STT auth failed (Wrapper returned 401/403)');
+							authError.statusCode = status;
+							authError.errorClass = 'SttUnauthorized';
+							throw authError;
+						}
+
+						// Non-auth errors: keep existing retry behavior.
 						chunk.retryCount++;
 						if (chunk.retryCount < MAX_RETRIES) {
 							// Retry later: requeue to the end so we don't block other chunks.
@@ -355,11 +394,18 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						appMetrics.observe('stt_latency_ms', errLatencyMs);
 						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
 						recordChunkFailure(transcriptId, chunk, {
-							statusCode: response.status,
+							statusCode: status,
 							retryCount: chunk.retryCount,
 							errorClass: 'SttNon200',
 							message: response.statusText || 'STT request failed',
 							queueWaitMs,
+						});
+						logger.error(COMPONENT, 'stt_response_failed', 'STT response non-200 after retries', {
+							transcriptId,
+							chunkId: chunk.chunkId,
+							statusCode: status,
+							errorClass: 'SttNon200',
+							retryCount: chunk.retryCount,
 						});
 						continue;
 					}

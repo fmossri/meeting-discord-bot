@@ -81,23 +81,38 @@ function createSessionManager({
 			try {
 				await transcriptWorker.enqueueChunk(sessionId, chunk);
 			} catch (error) {
-                chunk.sendRetryCount++;
+				// Bot ↔ Worker auth failure: abort send loop and let higher layers close the meeting.
+				if (error.statusCode === 401 || error.statusCode === 403) {
+					const context = {
+						sessionId,
+						transcriptId: sessionId,
+						chunkId: chunk?.chunkId,
+						errorClass: 'WorkerUnauthorized',
+						innerErrorClass: error.constructor?.name || 'Error',
+						message: error.message,
+						statusCode: error.statusCode,
+					};
+					logger.error(COMPONENT, 'chunk_send_failed', 'Worker HTTP auth failed (401/403)', context);
+					throw error;
+				}
 
-                if (chunk.sendRetryCount === MAX_RETRIES) {
-                    const context = {
-                        sessionId,
-                        transcriptId: sessionId,
-                        chunkId: chunk?.chunkId,
-                        sendRetryCount: chunk.sendRetryCount,
-                        errorClass: 'EnqueueChunkFailed',
-                        innerErrorClass: error.constructor?.name || 'Error',
-                        message: error.message,
-                    };
-                    if (error.statusCode != null) context.statusCode = error.statusCode;
-                    logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed after retries', context);
-                    continue;
-                }
-                sessionState.chunksQueue.push(chunk);
+				chunk.sendRetryCount++;
+
+				if (chunk.sendRetryCount === MAX_RETRIES) {
+					const context = {
+						sessionId,
+						transcriptId: sessionId,
+						chunkId: chunk?.chunkId,
+						sendRetryCount: chunk.sendRetryCount,
+						errorClass: 'EnqueueChunkFailed',
+						innerErrorClass: error.constructor?.name || 'Error',
+						message: error.message,
+					};
+					if (error.statusCode != null) context.statusCode = error.statusCode;
+					logger.error(COMPONENT, 'chunk_send_failed', 'Worker enqueueChunk failed after retries', context);
+					continue;
+				}
+				sessionState.chunksQueue.push(chunk);
 				continue;
 			}
 		}

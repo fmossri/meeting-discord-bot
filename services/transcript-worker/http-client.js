@@ -12,11 +12,17 @@ function createWorkerHttpClient(workerConfig, fetchImpl) {
         throw err;
     }
 
+    function getWorkerHeaders(workerConfig) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (workerConfig.workerAuthToken) {
+          headers['Internal-Worker-Auth'] = workerConfig.workerAuthToken;
+        }
+        return headers;
+      }
+
     async function startTranscript(transcriptId, meetingStartTimeMs) {
         const response = await fetchImpl(`${workerConfig.workerBaseUrl}/start-transcript`, {
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: getWorkerHeaders(workerConfig),
             method: 'POST',
             body: JSON.stringify({ transcriptId, meetingStartTimeMs }),
         });
@@ -29,9 +35,7 @@ function createWorkerHttpClient(workerConfig, fetchImpl) {
         const audioBase64 = Buffer.isBuffer(chunk.audio) ? chunk.audio.toString('base64') : chunk.audio;
         const payload = { ...chunk, audio: audioBase64 };
         const response = await fetchImpl(`${workerConfig.workerBaseUrl}/enqueue-chunk`, {
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: getWorkerHeaders(workerConfig),
             method: 'POST',
             body: JSON.stringify({ transcriptId, chunk: payload }),
         });
@@ -41,9 +45,7 @@ function createWorkerHttpClient(workerConfig, fetchImpl) {
 
     async function closeTranscript(transcriptId, { channelId, participantDisplayNames, closure } = {}) {
         const response = await fetchImpl(`${workerConfig.workerBaseUrl}/close-transcript`, {
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: getWorkerHeaders(workerConfig),
             method: 'POST',
             body: JSON.stringify({ transcriptId, channelId, participantDisplayNames, closure }),
         });
