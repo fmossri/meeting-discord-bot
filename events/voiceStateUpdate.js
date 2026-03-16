@@ -1,5 +1,5 @@
 const { Events } = require('discord.js');
-const timeoutDuration = require('../config/timeouts');
+const { meetingTimeouts } = require('../config/index.js');
 
 module.exports = {
 	name: Events.VoiceStateUpdate,
@@ -38,14 +38,14 @@ module.exports = {
                     clearTimeout(sessionState.timeouts.pauseTimeoutId);
                     sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
                         await client.botCoordinator.autoCloseMeeting(oldSession.sessionId);
-                    }, timeoutDuration.emptyRoomMs);
+                    }, meetingTimeouts.emptyRoomMs);
 
                 // Room empties and paused -> auto-close after pausedEmptyRoomMs timeout
                 } else {
                     clearTimeout(sessionState.timeouts.pauseTimeoutId);
                     sessionState.timeouts.pauseTimeoutId = setTimeout(async () => {
                         await client.botCoordinator.autoCloseMeeting(oldSession.sessionId);
-                    }, timeoutDuration.pausedEmptyRoomMs);
+                    }, meetingTimeouts.pausedEmptyRoomMs);
                 }
                 return;
             } catch (error) {

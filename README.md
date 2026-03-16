@@ -14,7 +14,7 @@ A Discord bot that implements STT and summarization capabilities.
 - **`/pause`** — Pause recording: stop audio capture and sending chunks. Worker drains existing chunks and idles. Transcript state preserved.
 - **`/resume`** — Resume recording: re-subscribe to in-channel participants and resume chunk flow.
 - **`/close`** — End the meeting, stop capture, flush remaining chunks, and run the end-of-session pipeline. Only participants can close.
-- **Auto-close on empty room** — If everyone leaves the voice channel without `/close`, the bot pauses and waits. After a configurable timeout with no one rejoining, it auto-closes the meeting and posts a message. Timeouts are set in `config/timeouts.js` (explicit pause, paused-empty-room, empty-room, UI confirm).
+- **Auto-close on empty room** — If everyone leaves the voice channel without `/close`, the bot pauses and waits. After a configurable timeout with no one rejoining, it auto-closes the meeting and posts a message. Timeouts are set in `config/index.js` (explicit pause, paused-empty-room, empty-room, UI confirm).
 - Session state stored in memory (no database). A **coordinator** (`coordinator/bot-coordinator.js`) handles all Discord flow: disclaimer, Accept/Reject, voice join/subscribe, close confirmation. A **session manager** (`services/session-manager/session-manager.js`) handles transcript lifecycle, PCM chunking, and report/summary generation.
 
 ### STT wrapper (Python)
@@ -25,7 +25,8 @@ A Discord bot that implements STT and summarization capabilities.
 ### Transcript worker (Node.js)
 
 - Per-transcript queue and HTTP client to the STT wrapper; writes JSONL transcript per meeting/session (metadata header at start, segments and optional gap markers). On close, the worker orders all lines by time then chunk so the report shows a chronological timeline; if a chunk failed STT or never reached the worker, a gap line is written so the reader sees where content is missing. API: `startTranscript(transcriptId, meetingStartTimeMs)`, `enqueueChunk(transcriptId, chunk)`, `closeTranscript(transcriptId, { channelId, participantDisplayNames, closure })`.
-- Optional standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-transcript`**, **`/enqueue-chunk`**, **`/close-transcript`**. The bot typically uses the worker in-process via `createTranscriptWorker`.
+- The worker can run in-process or as a separate HTTP service, selected via configuration. An adapter (`services/transcript-worker/get-transcript-worker.js`) always exposes the same `{ startTranscript, enqueueChunk, closeTranscript }` interface and, when running out-of-process, uses an internal HTTP client to call the worker server.
+- Standalone HTTP server (`services/transcript-worker/index.js`) with **`/start-transcript`**, **`/enqueue-chunk`**, **`/close-transcript`**. When configured to use HTTP, the bot calls these endpoints via the worker adapter.
 
 ### Observability (logs + in-process metrics)
 
@@ -52,7 +53,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ## Flow
 
-After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the coordinator posts it to Discord. If everyone leaves without closing, the bot auto-closes after a timeout (see `config/timeouts.js`).
+After participants accept a disclaimer, the bot joins the voice channel and subscribes to each accepting participant’s audio stream; the session manager chunks PCM and enqueues chunks to the worker. The worker calls the STT wrapper and appends to a JSONL transcript. `/pause` stops capture and chunk flow; the worker drains and idles. `/resume` re-subscribes to in-channel participants and resumes. On `/close` (with confirm), the coordinator stops capture, the session manager closes the worker, generates a Markdown report, and runs the LLM summary; the manager adds the summary to the report and the coordinator posts it to Discord. If everyone leaves without closing, the bot auto-closes after a configured timeout.
 
 **Current:** Full happy path works, including pause and resume. Unit tests (session store, worker, report/summary, session manager, coordinator, commands, voiceStateUpdate) and integration test covering happy path, pause/resume flow, and failure cases (worker down, STT retries).
 
@@ -120,8 +121,10 @@ Copy `.env-example` to `.env` and set:
 | `STT_USE_LOCAL`          | Use only cached models, no network. Set to `true` after first download or for offline. |
 | `STT_DEVICE`             | Device for inference: `cpu`, `cuda`, or `auto`. |
 | `STT_LANGUAGE`           | Optional. Language hint for transcription (e.g. `pt`, `en`). See Whisper language codes. |
-| `STT_BASE_URL`           | Base URL of the STT wrapper (e.g. `http://localhost:8000`). Used by the transcript Worker. |
-| `WORKER_PORT`            | Port for the transcript Worker HTTP server (e.g. `3000`). Used when running `node services/transcript-worker/index.js`. |
+| `STT_BASE_URL`           | Base URL of the STT wrapper (e.g. `http://localhost:8000`). |
+| `WORKER_USE_LOCAL`       | Whether the transcript worker runs in-process (`true`) or is called over HTTP (`false`). |
+| `WORKER_BASE_URL`        | Base URL of the worker HTTP server when `WORKER_USE_LOCAL=false` (e.g. `http://localhost:3000`). |
+| `WORKER_PORT`            | Port for the worker HTTP server when `WORKER_USE_LOCAL=false` (e.g. `3000`). |
 | `LLM_PROVIDER`           | LLM provider to use for summaries (currently `ollama`). |
 | `LLM_USE_LOCAL`          | Whether to use a local LLM instead of a remote API. |
 | `OLLAMA_BASE_URL`        | Base URL of the Ollama server (e.g. `http://localhost:11434`). |
@@ -198,7 +201,7 @@ Copy `.env-example` to `.env` and set:
 | `commands/utility/` | Slash commands: `start.js`, `pause.js`, `resume.js`, `close.js` |
 | `events/` | `ready.js`, `interactionCreate.js` |
 | `session.js` | In-memory session store (`sessionStore`) |
-| `config/timeouts.js` | Timeout values in ms: explicit pause, paused-empty-room, empty-room, UI confirm |
+| `config/index.js` | Central configuration (worker and manager config, timeouts, LLM timeouts) |
 | `coordinator/bot-coordinator.js` | Orchestrates meeting flow: start/pause/resume/close, disclaimer message + Accept/Reject buttons, join/subscribe, Session Manager |
 | `stt-wrapper/app.py` | FastAPI app: `/health`, `/transcribe`, model load at startup |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
@@ -207,6 +210,7 @@ Copy `.env-example` to `.env` and set:
 | `services/metrics/metrics.js` | In-process metrics (counters/gauges/histograms) for observability |
 | `services/transcript-worker/transcript-worker.js` | Transcript worker: per-transcript queue, STT client, JSONL transcript lifecycle |
 | `services/transcript-worker/index.js` | Transcript worker HTTP server: `/start-transcript`, `/enqueue-chunk`, `/close-transcript` |
+| `services/transcript-worker/get-transcript-worker.js` | Adapter that returns either the in-process worker or an HTTP client based on configuration |
 | `services/report-generator/report-generator.js` | Generates pretty-printed Markdown reports (`reports/meeting-report_*.md`) from JSONL transcripts |
 | `services/report-generator/summary-generator.js` | Calls an LLM to summarize a report into a short Markdown summary |
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |

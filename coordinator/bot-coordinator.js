@@ -2,7 +2,6 @@ const prism = require('prism-media');
 const { ButtonBuilder, ButtonStyle, ActionRowBuilder, MessageFlags } = require('discord.js');
 const { joinVoiceChannel, EndBehaviorType } = require('@discordjs/voice');
 const { interactionErrorHelper } = require('../utils/interaction-errors.js');
-const { meetingTimeouts } = require('../config/timeouts.js');
 const logger = require('../services/logger/logger');
 const appMetrics = require('../services/metrics/metrics');
 
@@ -10,7 +9,8 @@ const COMPONENT = 'bot-coordinator';
 const LATE_JOINER_DM =
 	'A meeting with recording is in progress in this channel. To join as a participant, click **Accept** on the disclaimer message in the channel. To decline being recorded, click **Reject**.';
 
-function createBotCoordinator(sessionStore) {
+function createBotCoordinator(coordinatorConfig, sessionStore) {
+    const { meetingTimeouts } = coordinatorConfig;
     const confirmMsgToSession = new Map();
 
     async function connectToChannel(sessionId) {
