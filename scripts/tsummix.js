@@ -4,11 +4,16 @@
  * Start the Discord bot and/or STT wrapper.
  *
  * Usage (after npm link, or node scripts/tsummix.js):
- *   tsummix start        → bot + STT wrapper
- *   tsummix start node   → only Node bot
- *   tsummix start python → only STT wrapper (Python)
+ *   tsummix run                       → bot + STT wrapper (local processes)
+ *   tsummix run --distribute          → bot + worker + STT wrapper (worker over HTTP, no Docker)
+ *   tsummix run bot                   → only Node bot
+ *   tsummix run stt                   → only STT wrapper (Python)
+ *   tsummix run worker                → only transcript worker HTTP server (Node)
+ *   tsummix run dev [--distribute]    → docker compose up using docker-compose.dev.yml (bot+stt or bot+worker+stt)
+ *   tsummix run prod [--distribute]   → docker compose up using docker-compose.prod.yml (bot+stt or bot+worker+stt)
  *
- * Expects .venv in repo root with uvicorn when starting Python.
+ * Expects .venv in repo root with uvicorn when starting Python, and Docker/Compose
+ * installed when using dev/prod.
  */
 
 const { spawn } = require('node:child_process');
@@ -16,8 +21,10 @@ const path = require('node:path');
 
 const root = path.join(__dirname, '..');
 const args = process.argv.slice(2);
-const sub = args[0]; // "start"
-const target = args[1]; // undefined | "node" | "python"
+const sub = args[0]; // "run"
+const rest = args.slice(1);
+const target = rest.find((a) => !a.startsWith('--')); // undefined | "bot" | "stt" | "worker" | "dev" | "prod"
+const hasDistributeFlag = rest.includes('--distribute');
 const isWin = process.platform === 'win32';
 
 function runBot() {
@@ -43,6 +50,19 @@ function runSTT() {
 	return child;
 }
 
+function runWorker() {
+	const child = spawn('node', ['services/transcript-worker/index.js'], {
+		cwd: root,
+		stdio: 'inherit',
+		shell: isWin,
+	});
+	child.on('error', (err) => console.error(err));
+	child.on('close', (code) => {
+		if (code !== 0 && code !== null) process.exitCode = code;
+	});
+	return child;
+}
+
 function runBoth() {
 	const nodeProc = runBot();
 	const pythonProc = runSTT();
@@ -52,18 +72,74 @@ function runBoth() {
 	});
 }
 
+function runDistribute() {
+	// Worker HTTP server
+	const workerProc = runWorker();
+	// STT wrapper (Python)
+	const sttProc = runSTT();
+	// Bot, forced to use HTTP worker
+	const botEnv = {
+		...process.env,
+		WORKER_USE_LOCAL: 'false',
+		WORKER_BASE_URL: process.env.WORKER_BASE_URL || 'http://localhost:3000',
+	};
+	const botProc = spawn('node', ['index.js'], {
+		cwd: root,
+		stdio: 'inherit',
+		shell: isWin,
+		env: botEnv,
+	});
+	botProc.on('error', (err) => console.error(err));
+	botProc.on('close', (code) => {
+		if (code !== 0 && code !== null) process.exitCode = code;
+	});
+
+	process.on('SIGINT', () => {
+		botProc.kill('SIGINT');
+		workerProc.kill('SIGINT');
+		sttProc.kill('SIGINT');
+	});
+}
+
+function runCompose(file, distribute) {
+	const services = distribute ? [] : ['bot', 'stt-wrapper'];
+	const composeArgs = ['compose', '-f', file, 'up', ...services];
+	const child = spawn('docker', composeArgs, {
+		cwd: root,
+		stdio: 'inherit',
+		shell: isWin,
+	});
+	child.on('error', (err) => console.error(err));
+	child.on('close', (code) => {
+		if (code !== 0 && code !== null) process.exitCode = code;
+	});
+	return child;
+}
+
 if (sub !== 'run') {
-	console.error('Usage: tsummix run [bot|stt]');
+	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute]');
 	process.exit(1);
 }
 
-if (target === 'bot') {
+if (!target) {
+	// tsummix run → local bot + STT wrapper
+	if (hasDistributeFlag) {
+		// tsummix run --distribute → local bot + worker + STT wrapper
+		runDistribute();
+	} else {
+		runBoth();
+	}
+} else if (target === 'bot') {
 	runBot();
 } else if (target === 'stt') {
 	runSTT();
-} else if (!target) {
-	runBoth();
+} else if (target === 'worker') {
+	runWorker();
+} else if (target === 'dev') {
+	runCompose('docker-compose.dev.yml', hasDistributeFlag);
+} else if (target === 'prod') {
+	runCompose('docker-compose.prod.yml', hasDistributeFlag);
 } else {
-	console.error('Usage: tsummix run [bot|stt]');
+	console.error('Usage: tsummix run [bot|stt|worker|dev|prod] [--distribute]');
 	process.exit(1);
 }

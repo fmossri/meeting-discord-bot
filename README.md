@@ -147,12 +147,29 @@ Copy `.env-example` to `.env` and set:
 2. Start the bot and STT-Wrapper:
    ```bash
    npm start              # bot + STT wrapper
-   npm run start:bot     # only Node bot
-   npm run start:stt   # only STT wrapper
+   npm run start:bot      # only Node bot
+   npm run start:stt      # only STT wrapper
    ```
-   To run from the shell without `npm` or `node`, link once: `npm link`. Then run `tsummix run`, `tsummix run bot`, or `tsummix run stt`.
+   To run from the shell without `npm` or `node`, link once: `npm link`. Then you can use:
+   ```bash
+   # Local, no Docker
+   tsummix run                 # bot + STT wrapper, worker in-process
+   tsummix run --distribute    # bot + worker HTTP server + STT wrapper (worker over HTTP)
+   tsummix run bot             # only Node bot
+   tsummix run stt             # only STT wrapper
+   tsummix run worker          # only transcript worker HTTP server
 
-**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=silent` so no JSON log lines are printed; override with `LOG_LEVEL=info npm test` when debugging.
+   # Docker / Compose **Requires Testing**
+   tsummix run dev             # docker-compose.dev.yml (bot + stt-wrapper)
+   tsummix run dev --distribute   # docker-compose.dev.yml (bot + worker + stt-wrapper)
+   tsummix run prod            # docker-compose.prod.yml (bot + stt-wrapper)
+   tsummix run prod --distribute  # docker-compose.prod.yml (bot + worker + stt-wrapper)
+   ```
+
+**Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=silent` so no JSON log lines are printed; override with `LOG_LEVEL=info npm test` when debugging. For the Python STT wrapper, with your venv activated:
+```bash
+pytest tests/stt_wrapper/test_app.py
+```
 
 **STT wrapper**
 
@@ -215,7 +232,7 @@ Copy `.env-example` to `.env` and set:
 | `services/report-generator/llm-adapters/` | Provider-specific LLM adapters (e.g. Ollama chat API client) |
 | `services/session-manager/session-manager.js` | Transcript worker lifecycle, PCM chunking (from streams the controller wires), report and summary generation. Controller owns voice and capture. |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
-| `scripts/tsummix.js` | CLI: `tsummix run` (both), `tsummix run bot`, `tsummix run stt`. Use after `npm link`. |
+| `scripts/tsummix.js` | CLI: `tsummix run` (local), `tsummix run dev/prod [--distribute]`, and worker-only/distributed options. Use after `npm link`. |
 | `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |

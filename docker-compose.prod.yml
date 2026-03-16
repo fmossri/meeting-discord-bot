@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - ./services/transcript-worker/transcripts:/app/services/transcript-worker/transcripts
+      - ./reports:/app/reports
+    depends_on:
+      - stt-wrapper
+      - worker
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      WORKER_PORT: 3000
+    command: ["node", "services/transcript-worker/index.js"]
+    volumes:
+      - ./services/transcript-worker/transcripts:/app/services/transcript-worker/transcripts
+
+  stt-wrapper:
+    build:
+      context: .
+      dockerfile: Dockerfile.wrapper
+    env_file:
+      - .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./.models:/app/.models
+    ports:
+      - "8000:8000"
+

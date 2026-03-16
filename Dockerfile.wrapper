@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps for audio/ffmpeg if needed by faster-whisper/av
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy STT wrapper sources
+COPY stt-wrapper/ ./stt-wrapper/
+
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "stt-wrapper.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
