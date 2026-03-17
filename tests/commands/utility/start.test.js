@@ -4,13 +4,14 @@ const startCommand = require('../../../commands/utility/start.js');
 function createMockInteraction(overrides = {}) {
 	const reply = jest.fn().mockResolvedValue(undefined);
 	const sessionStore = {
-		channelHasSession: jest.fn().mockReturnValue(false),
+		guildHasSession: jest.fn().mockReturnValue(false),
 	};
 	const meetingController = {
 		startMeeting: jest.fn().mockResolvedValue(undefined),
 	};
 	const interaction = {
 		member: { voice: { channel: { id: 'voice-123' } } },
+		guild: { id: 'guild-123' },
 		client: { sessionStore, meetingController },
 		reply,
 		...overrides,
@@ -34,15 +35,15 @@ describe('/start', () => {
 		expect(meetingController.startMeeting).not.toHaveBeenCalled();
 	});
 
-	it('replies with "A session is already in progress" and does not call controller when channel has a session', async () => {
+	it('replies with "A meeting is already in progress" and does not call controller when guild has a session', async () => {
 		const { interaction, reply, sessionStore, meetingController } = createMockInteraction();
-		sessionStore.channelHasSession.mockReturnValue(true);
+		sessionStore.guildHasSession.mockReturnValue(true);
 
 		await startCommand.execute(interaction);
 
 		expect(reply).toHaveBeenCalledTimes(1);
 		expect(reply).toHaveBeenCalledWith({
-			content: 'A session is already in progress in this channel',
+			content: 'A meeting is already in progress in this server.',
 			flags: MessageFlags.Ephemeral,
 		});
 		expect(meetingController.startMeeting).not.toHaveBeenCalled();

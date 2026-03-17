@@ -9,6 +9,24 @@ const COMPONENT = 'meeting-controller';
 const LATE_JOINER_DM =
 	'A meeting with recording is in progress in this channel. To join as a participant, click **Accept** on the disclaimer message in the channel. To decline being recorded, click **Reject**.';
 
+function getCloseFailureMessage(error, closeErrorClass) {
+    if (error.statusCode === 401 || error.statusCode === 403) {
+        return error.errorClass === 'SttUnauthorized'
+            ? 'The meeting was aborted: an internal authentication error occurred (Worker ↔ STT). Please contact the operator to verify service configuration.'
+            : 'The meeting was aborted: an internal authentication error occurred (Bot ↔ Worker). Please contact the operator to verify service configuration.';
+    }
+    if (closeErrorClass === 'EmptyTranscript') {
+        return 'The meeting has ended. The transcript could not be generated.';
+    }
+    if (closeErrorClass === 'SummaryGenerationFailed') {
+        return 'The meeting has ended. The report was saved, but the summary could not be generated. You can open the report file to read the transcript.';
+    }
+    if (closeErrorClass === 'ReportGenerationFailed') {
+        return 'The meeting has ended. The transcript was saved, but the report could not be generated.';
+    }
+    return 'The meeting has ended. There was a problem closing the session; the transcript, report, or summary may be missing or incomplete.';
+}
+
 function createMeetingController(controllerConfig, sessionStore) {
     const { meetingTimeouts } = controllerConfig;
     const confirmMsgToSession = new Map();
@@ -353,13 +371,7 @@ function createMeetingController(controllerConfig, sessionStore) {
                 innerErrorClass: error.constructor?.name || 'Error',
                 message: error.message,
             });
-            const failureMessage = closeErrorClass === 'EmptyTranscript'
-                ? 'The meeting has ended. The transcript could not be generated.'
-                : closeErrorClass === 'SummaryGenerationFailed'
-                    ? 'The meeting has ended. The report was saved, but the summary could not be generated. You can open the report file to read the transcript.'
-                    : closeErrorClass === 'ReportGenerationFailed'
-                        ? 'The meeting has ended. The transcript was saved, but the report could not be generated.'
-                        : 'The meeting has ended. There was a problem closing the session; the transcript, report, or summary may be missing or incomplete.';
+            const failureMessage = getCloseFailureMessage(error, closeErrorClass);
             await sessionState.originalInteraction.followUp({ content: failureMessage }).catch(() => {});
             sessionStore.deleteSession(sessionId);
             return false;
@@ -461,6 +473,7 @@ function createMeetingController(controllerConfig, sessionStore) {
                 dmIds: [],
                 initialMemberIds: Array.from(voiceChannel.members?.keys?.() ?? []),
                 participantStates: new Map(),
+                guildId: interaction.guild?.id ?? null,
                 voiceChannelId: voiceChannel.id,
                 originalInteraction: interaction,
                 timeouts:{uiTimeoutId: null, pauseTimeoutId: null},

@@ -14,6 +14,15 @@ const sessionStore = {
 		return null;
 	},
 
+	findSessionByGuildId(guildId) {
+		for (const [sessionId, sessionState] of sessions.entries()) {
+			if (sessionState.guildId === guildId) {
+				return { sessionId, sessionState };
+			}
+		}
+		return null;
+	},
+
 	getSessionById(sessionId) {
 		return sessions.get(sessionId);
 	},
@@ -30,6 +39,10 @@ const sessionStore = {
 
 	channelHasSession(channelId) {
 		return this.findSessionByChannelId(channelId) !== null;
+	},
+
+	guildHasSession(guildId) {
+		return this.findSessionByGuildId(guildId) !== null;
 	},
 
 	clearSessions() {

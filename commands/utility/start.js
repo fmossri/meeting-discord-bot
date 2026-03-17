@@ -13,9 +13,9 @@ module.exports = {
 			return;
 		}
 
-		if (interaction.client.sessionStore.channelHasSession(voiceChannel.id)) {
+		if (interaction.client.sessionStore.guildHasSession(interaction.guild?.id)) {
 			await interaction.reply({
-				content: 'A session is already in progress in this channel',
+				content: 'A meeting is already in progress in this server.',
 				flags: MessageFlags.Ephemeral,
 			});
 			return;
