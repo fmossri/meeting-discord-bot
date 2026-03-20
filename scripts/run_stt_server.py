@@ -9,7 +9,7 @@ import os
 import sys
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-stt_wrapper = os.path.join(root, "stt-wrapper")
+stt_wrapper = os.path.join(root, "stt_wrapper")
 if stt_wrapper not in sys.path:
     sys.path.insert(0, stt_wrapper)
 
@@ -20,4 +20,4 @@ if sys.platform == "win32":
 else:
     uvicorn_exe = os.path.join(root, ".venv", "bin", "uvicorn")
 
-os.execve(uvicorn_exe, ["uvicorn", "stt-wrapper.app:app"], os.environ)
+os.execve(uvicorn_exe, ["uvicorn", "stt_wrapper.app:app"], os.environ)
