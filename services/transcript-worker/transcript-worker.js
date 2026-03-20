@@ -59,7 +59,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 				chunksQueue: [],
 				processedChunks: [],
 				failedChunks: [],
-				chunksBucket: new Map(),
 				inFlight: false,
 				meetingStartIso: meetingStartTimeIso,
 				transcriptState: {
@@ -258,7 +257,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 
 	function recordChunkFailure(transcriptId, chunk, logContext) {
 		const transcript = transcriptsMap.get(transcriptId);
-        transcript.chunksBucket.delete(chunk.chunkId);
 		chunk.lastErrorClass = logContext?.errorClass ?? null;
 		chunk.lastErrorMessage = logContext?.message ?? null;
 		appMetrics.increment('chunks_failed_total');
@@ -326,7 +324,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
                 await waitForSttReady();
 				const chunk = transcript.chunksQueue.shift();
 				appMetrics.set('worker_queue_depth', getTotalQueueDepth());
-				transcript.chunksBucket.set(chunk.chunkId, chunk);
 				const queueWaitMsRaw = chunk.receivedAtMs != null ? Date.now() - chunk.receivedAtMs : null;
 				const queueWaitMs = queueWaitMsRaw != null && queueWaitMsRaw < 0 ? 0 : queueWaitMsRaw;
 				if (queueWaitMsRaw != null && queueWaitMsRaw < 0) {
@@ -385,7 +382,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						}
                         if (status === 503) {
                             transcript.chunksQueue.unshift(chunk);
-                            transcript.chunksBucket.delete(chunk.chunkId);
                             logger.warn(COMPONENT, 'stt_busy', 'STT wrapper busy; re-queued without penalty', {
                                 transcriptId,
                                 chunkId: chunk.chunkId,
@@ -398,7 +394,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						if (chunk.retryCount < MAX_RETRIES) {
 							// Retry later: requeue to the end so we don't block other chunks.
 							transcript.chunksQueue.push(chunk);
-							transcript.chunksBucket.delete(chunk.chunkId);
 							continue;
 						}
 
@@ -443,21 +438,32 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						segmentsCount: segments.length,
 					});
 
-					if (transcript.chunksBucket.has(responseJson.chunkId)) {
-						const bucketChunk = transcript.chunksBucket.get(responseJson.chunkId);
-						bucketChunk.segmentBuffer.push(...responseJson.segments);
-						bucketChunk.audio = null;
-						transcript.processedChunks.push(bucketChunk);
+					if (chunk.chunkId === responseJson.chunkId) {
+						chunk.segmentBuffer.push(...responseJson.segments);
+						chunk.audio = null;
+						transcript.processedChunks.push(chunk);
 						transcript.transcriptState.processedSinceFlush++;
-						transcript.chunksBucket.delete(responseJson.chunkId);
+					} else {
+						logger.error(COMPONENT, 'stt_response_failed', `Invariant: STT response chunkId mismatch (sent=${chunk.chunkId}, received=${responseJson.chunkId})`, {
+							transcriptId,
+							chunkId: chunk.chunkId,
+							responseChunkId: responseJson.chunkId,
+						});
+						appMetrics.increment('chunks_failed_total');
+						chunk.audio = null;
+						transcript.failedChunks.push(chunk);
+						continue;
 					}
 					if (transcript.transcriptState.processedSinceFlush >= FLUSH_AFTER_PROCESSED_CHUNKS) {
 						await appendToTemp(transcriptId);
 					}
 				} catch (error) {
+					if (error.errorClass === 'SttUnauthorized') {
+						throw error;
+					}
+
 					if (!countedCall) appMetrics.increment('stt_calls_total');
 					appMetrics.increment('stt_errors_total');
-					transcript.chunksBucket.delete(chunk.chunkId);
 
 					chunk.retryCount = (chunk.retryCount || 0) + 1;
 					if (chunk.retryCount < MAX_RETRIES) {

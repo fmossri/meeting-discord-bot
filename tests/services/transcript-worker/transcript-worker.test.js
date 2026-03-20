@@ -309,7 +309,7 @@ describe('enqueueChunk', () => {
         await worker.enqueueChunk('test-transcript', createChunk({ chunkId: 2 }));
         await worker.closeTranscript('test-transcript');
 
-        expect(transcribeOrder).toEqual([1, 2, 1]);
+        expect(transcribeOrder).toEqual([1, 1, 2]);
     });
 });
 
