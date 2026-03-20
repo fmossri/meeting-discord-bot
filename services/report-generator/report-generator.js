@@ -25,11 +25,11 @@ function createReportGenerator({ fsImpl = fs, pathImpl = path } = {}) {
                     lineText = textString.slice(0, textColumnWidth - 1) + '-';
                     textString = textString.slice(textColumnWidth - 1);
                 }
-                const line = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${lineText}`;
+                const line = `${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${lineText}`;
                 report.push(line);
             }
             if (textString.length > 0) {
-                const lastLine = `${' '}${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${textString}`;
+                const lastLine = `${' '.repeat(timeColumnWidth)}|${' '.repeat(nameColumnWidth)}|${' '}${textString}`;
                 report.push(lastLine);
             }
         }
