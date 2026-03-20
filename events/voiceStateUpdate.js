@@ -23,7 +23,7 @@ module.exports = {
             if (!oldState.channel || !sessionState?.started) return;
             const membersInChannel = oldState.channel.members;
             // Check if there are any participants in the meeting's voice channel.
-            for (const member of membersInChannel) {
+            for (const [_, member] of membersInChannel) {
                 if (!member?.user?.id) continue;
                 // A participant is still in the channel -> do nothing.
                 if (sessionState.participantIds.includes(member.user.id)) {
