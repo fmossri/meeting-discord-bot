@@ -154,7 +154,7 @@ function createSessionManager({
 			return false;
 		}
 		const TARGET_SAMPLES = 30 * 16000;
-		participantState.chunkerState._lastPcmLogMs = 0;
+		participantState.chunkerState._hasLoggedPcmData = false;
 		try {
 			const pcmStream = participantState.pcmStream;
 			pcmStream.on('data', (pcmBuffer) => {
@@ -167,10 +167,9 @@ function createSessionManager({
                     pcmBuffer
                 ]);
 				participantState.chunkerState.samplesInBuffer += samplesInThisBuffer;
-				const now = Date.now();
-				if (now - participantState.chunkerState._lastPcmLogMs >= 1000) {
-					participantState.chunkerState._lastPcmLogMs = now;
-					logger.debug(COMPONENT, 'pcm_data_received', 'PCM stream data', {
+				if (!participantState.chunkerState._hasLoggedPcmData) {
+					participantState.chunkerState._hasLoggedPcmData = true;
+					logger.info(COMPONENT, 'pcm_data_received', 'PCM stream data', {
 						sessionId,
 						participantId,
 						displayName: participantState.displayName,
@@ -178,7 +177,6 @@ function createSessionManager({
 						totalSamplesInBuffer: participantState.chunkerState.samplesInBuffer,
 					});
 				}
-
 				while (participantState.chunkerState.samplesInBuffer >= TARGET_SAMPLES) {
                     try {
                         const participant = { participantId: participantId, participantState: participantState };

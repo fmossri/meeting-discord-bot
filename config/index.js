@@ -32,6 +32,16 @@ function getBoolean(name, fallback) {
     return parsed;
   }
 
+function getChunkingStrategy(name) {
+    const validStrategies = ['fixedSize', 'silenceBased'];
+    const raw = process.env[name];
+    const parsed = raw != null ? raw.toLowerCase().trim() : 'fixedSize';
+    if (!validStrategies.includes(parsed)) {
+        throw new Error(`Invalid chunking strategy: ${parsed}\nValid strategies: ${validStrategies.join(', ')}`);
+    }
+    return parsed;
+}
+
 function requireBaseUrl(name) {
     const raw = process.env[name]?.trim();
     if (!raw) {
@@ -91,6 +101,18 @@ module.exports = {
     managerConfig: {
         //Port for the manager HTTP server
         managerPort: getNonZeroInt('MANAGER_PORT', 3002),
+        //Chunking strategy
+        chunkingStrategy: getChunkingStrategy('CHUNKING_STRATEGY'),
+        //Fixed size for the chunks
+        fixedSize: getNonZeroInt('FIXED_SIZE', 30 * 16000),
+        //Silence threshold for the chunks
+        silenceThreshold: getNonZeroInt('SILENCE_THRESHOLD', -42),
+        //Silence hold time for the chunks
+        silenceHoldMs: getNonZeroInt('SILENCE_HOLD_MS', 500),
+        //Minimum chunk duration
+        minChunkMs: getNonZeroInt('MIN_CHUNK_MS', 20 * 1000),
+        //Maximum chunk duration
+        maxChunkMs: getNonZeroInt('MAX_CHUNK_MS', 30 * 1000),
         //Auth token for the bot to access the worker
         workerAuthToken: resolvedWorkerAuthToken,
         //Base URL for the worker HTTP server
