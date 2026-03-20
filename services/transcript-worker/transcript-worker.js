@@ -301,7 +301,7 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
                 });
                 if (res.status === 200) {
                     const body = await res.json();
-                    if (body && body.ready === true) return;
+                    if (body && body.ready === true && !body.busy) return;
                 }
 			} catch (_) { /* ignore */ }
 			await new Promise((r) => setTimeout(r, workerTimeouts.sttReadyPollMs));
@@ -383,24 +383,18 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 							authError.errorClass = 'SttUnauthorized';
 							throw authError;
 						}
-                        chunk.retryCount++;
-                        if (status === 429) {
-                            if (chunk.retryCount < MAX_RETRIES) {
-                                // Retry later at the end so one throttled chunk doesn't block newer chunks.
-                                transcript.chunksQueue.push(chunk);
-                                transcript.chunksBucket.delete(chunk.chunkId);
-                                logger.warn(COMPONENT, 'stt_response_failed', 'STT returned 429; re-queued to tail', {
-                                    transcriptId,
-                                    chunkId: chunk.chunkId,
-                                    statusCode: 429,
-                                    errorClass: 'SttNon200',
-                                    retryCount: chunk.retryCount,
-                                });
-                                continue;
-                            }
+                        if (status === 503) {
+                            transcript.chunksQueue.unshift(chunk);
+                            transcript.chunksBucket.delete(chunk.chunkId);
+                            logger.warn(COMPONENT, 'stt_busy', 'STT wrapper busy; re-queued without penalty', {
+                                transcriptId,
+                                chunkId: chunk.chunkId,
+                                statusCode: 503,
+                            });
+                            continue;
                         }
 
-                        // Non-auth errors: keep existing retry behavior.
+                        chunk.retryCount++;
 						if (chunk.retryCount < MAX_RETRIES) {
 							// Retry later: requeue to the end so we don't block other chunks.
 							transcript.chunksQueue.push(chunk);
@@ -412,9 +406,7 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 						const errLatencyMs = Math.max(0, Date.now() - sttStartMs);
 						appMetrics.observe('stt_latency_ms', errLatencyMs);
 						if (queueWaitMs != null) appMetrics.observe('stt_queue_wait_ms', queueWaitMs);
-                        const failureMessage = status === 429
-                            ? 'Too Many Requests'
-                            : (response.statusText || 'STT request failed');
+                        const failureMessage = response.statusText || 'STT request failed';
 						recordChunkFailure(transcriptId, chunk, {
 							statusCode: status,
 							retryCount: chunk.retryCount,

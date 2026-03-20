@@ -4,6 +4,7 @@ import io
 import time
 import base64
 import traceback
+import threading
 import wave
 from contextlib import asynccontextmanager
 
@@ -76,14 +77,6 @@ def _wav_bytes_to_float32_mono(audio_bytes: bytes) -> tuple[np.ndarray, int]:
         samples = samples.reshape(-1, n_channels).mean(axis=1)
     return samples, framerate
 
-
-app = FastAPI(
-    title="STT Wrapper",
-    description="A wrapper for the STT model",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
@@ -105,29 +98,41 @@ async def lifespan(app: FastAPI):
     yield
     # No explicit teardown required; allow process exit to release resources.
 
+_transcribe_lock = threading.Lock()
+
+app = FastAPI(
+    title="STT Wrapper",
+    description="A wrapper for the STT model",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
 @app.get("/health", dependencies=[Depends(verify_worker_auth)])
 def health():
-    return {"ready": bool(getattr(app.state, "ready", False)),
-            "model_id": getattr(app.state, "model_id", None), 
-            "device": getattr(app.state, "device", None),
+    return {
+        "ready": bool(getattr(app.state, "ready", False)),
+        "busy": _transcribe_lock.locked(),
+        "model_id": getattr(app.state, "model_id", None),
+        "device": getattr(app.state, "device", None),
     }
 
 @app.post("/transcribe", dependencies=[Depends(verify_worker_auth)])
 def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     if not app.state.ready:
-        raise HTTPException(status_code=429, detail="STT wrapper not ready")
-    model = app.state.model
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    if not _transcribe_lock.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="STT wrapper busy")
     try:
-        app.state.ready = False
+        model = app.state.model
         t0 = time.perf_counter()
         audio_bytes = base64.b64decode(request.audio)
         audio_float32, sample_rate = _wav_bytes_to_float32_mono(audio_bytes)
         segments, info = model.transcribe(audio_float32, language="pt")
         segments = [
             Segment(
-                segmentIndex=i, 
-                startMs=request.chunkStartTimeMs + int(segment.start * 1000), 
-                endMs=request.chunkStartTimeMs + int(segment.end * 1000), 
+                segmentIndex=i,
+                startMs=request.chunkStartTimeMs + int(segment.start * 1000),
+                endMs=request.chunkStartTimeMs + int(segment.end * 1000),
                 text=segment.text
                 ) for i, segment in enumerate(list(segments))]
         processing_ms = int((time.perf_counter() - t0) * 1000)
@@ -135,18 +140,17 @@ def transcribe(request: TranscribeRequest) -> TranscribeResponse:
         real_time_factor = processing_ms / duration_ms if duration_ms > 0 else 0.0
         metrics = Metrics(
             chunkDurationMs=duration_ms,
-            processingMs=processing_ms, 
+            processingMs=processing_ms,
             realTimeFactor=real_time_factor)
 
-        response = TranscribeResponse(
+        return TranscribeResponse(
             transcriptId=request.transcriptId,
             chunkId=request.chunkId,
             segments=segments,
             metrics=metrics)
-        return response
 
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        app.state.ready = True
+        _transcribe_lock.release()
