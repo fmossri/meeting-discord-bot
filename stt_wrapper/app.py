@@ -76,6 +76,14 @@ def _wav_bytes_to_float32_mono(audio_bytes: bytes) -> tuple[np.ndarray, int]:
         samples = samples.reshape(-1, n_channels).mean(axis=1)
     return samples, framerate
 
+
+app = FastAPI(
+    title="STT Wrapper",
+    description="A wrapper for the STT model",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.ready = False
@@ -97,14 +105,6 @@ async def lifespan(app: FastAPI):
     yield
     # No explicit teardown required; allow process exit to release resources.
 
-
-app = FastAPI(
-    title="STT Wrapper",
-    description="A wrapper for the STT model",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
 @app.get("/health", dependencies=[Depends(verify_worker_auth)])
 def health():
     return {"ready": bool(getattr(app.state, "ready", False)),
@@ -113,11 +113,12 @@ def health():
     }
 
 @app.post("/transcribe", dependencies=[Depends(verify_worker_auth)])
-async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
-    if not app.state.ready or app.state.model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+def transcribe(request: TranscribeRequest) -> TranscribeResponse:
+    if not app.state.ready:
+        raise HTTPException(status_code=429, detail="STT wrapper not ready")
     model = app.state.model
     try:
+        app.state.ready = False
         t0 = time.perf_counter()
         audio_bytes = base64.b64decode(request.audio)
         audio_float32, sample_rate = _wav_bytes_to_float32_mono(audio_bytes)
@@ -147,3 +148,5 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        app.state.ready = True
