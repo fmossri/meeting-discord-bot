@@ -13,6 +13,7 @@ jest.mock('../../../services/metrics/metrics', () => ({
 }));
 
 const logger = require('../../../services/logger/logger');
+const appMetrics = require('../../../services/metrics/metrics');
 const { createTranscriptWorker } = require('../../../services/transcript-worker/transcript-worker');
 const { createChunk } = require('../../helpers/test-utils');
 
@@ -145,11 +146,15 @@ describe('startTranscript', () => {
 describe('enqueueChunk', () => {
     it('throws when transcript not found', async () => {
         await expect(worker.enqueueChunk('test-transcript', createChunk())).rejects.toThrow('Invariant: transcript not found in enqueueChunk');
+        expect(
+            appMetrics.increment.mock.calls.filter((c) => c[0] === 'chunk_enqueue_validation_failures_total'),
+        ).toHaveLength(0);
     });
 
     it('throws when chunkId is not a number', async () => {
         await worker.startTranscript('test-transcript');
         await expect(worker.enqueueChunk('test-transcript', createChunk({ chunkId: 'not-a-number' }))).rejects.toThrow('Chunk ID must be a number');
+        expect(appMetrics.increment).toHaveBeenCalledWith('chunk_enqueue_validation_failures_total');
     });
 
     it('throws when chunk has no participantData', async () => {

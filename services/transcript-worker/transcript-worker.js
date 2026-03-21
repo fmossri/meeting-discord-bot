@@ -97,13 +97,13 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 	}
 
 	async function enqueueChunk(transcriptId, chunk) {
-        let transcript;
-        try {
-            if (!transcriptsMap.has(transcriptId)) {
-                throw new Error('Invariant: transcript not found in enqueueChunk');
-            }
+		if (!transcriptsMap.has(transcriptId)) {
+			throw new Error('Invariant: transcript not found in enqueueChunk');
+		}
 
-            transcript = transcriptsMap.get(transcriptId);
+		const transcript = transcriptsMap.get(transcriptId);
+
+		try {
 			if (typeof chunk.chunkId !== 'number') {
 				throw new Error('Chunk ID must be a number');
 			}
@@ -113,21 +113,6 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 			if (!chunk.participantData || typeof chunk.participantData !== 'object') {
 				throw new Error('Chunk has no participantData');
 			}
-			chunk.participantId = chunk.participantData.participantId;
-			chunk.displayName = chunk.participantData.displayName;
-			chunk.segmentBuffer = [];
-			chunk.retryCount = 0;
-			chunk.receivedAtMs = Date.now();
-			transcript.chunksQueue.push(chunk);
-			appMetrics.increment('chunks_enqueued_total');
-			appMetrics.set('worker_queue_depth', getTotalQueueDepth());
-
-			logger.info(COMPONENT, 'chunk_enqueued', 'Chunk enqueued', {
-				transcriptId,
-				chunkId: chunk.chunkId,
-				workerQueueDepth: transcript.chunksQueue.length,
-			});
-
 		} catch (error) {
 			appMetrics.increment('chunk_enqueue_validation_failures_total');
 			logger.error(COMPONENT, 'chunk_enqueue_failed', 'Chunk validation failed', {
@@ -139,7 +124,23 @@ function createTranscriptWorker({ workerConfig, fetchImpl, fsImpl, pathImpl }) {
 			});
 			throw error;
 		}
-        if (!transcript.transcriptState.processingPromise) ensureProcessing(transcriptId);
+
+		chunk.participantId = chunk.participantData.participantId;
+		chunk.displayName = chunk.participantData.displayName;
+		chunk.segmentBuffer = [];
+		chunk.retryCount = 0;
+		chunk.receivedAtMs = Date.now();
+		transcript.chunksQueue.push(chunk);
+		appMetrics.increment('chunks_enqueued_total');
+		appMetrics.set('worker_queue_depth', getTotalQueueDepth());
+
+		logger.info(COMPONENT, 'chunk_enqueued', 'Chunk enqueued', {
+			transcriptId,
+			chunkId: chunk.chunkId,
+			workerQueueDepth: transcript.chunksQueue.length,
+		});
+
+		if (!transcript.transcriptState.processingPromise) ensureProcessing(transcriptId);
 	}
 
 	function getSegmentClockTimeMs(chunk, segment) {

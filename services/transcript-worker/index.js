@@ -4,6 +4,8 @@ const { createTranscriptWorker } = require('./transcript-worker');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
+const appMetrics = require('../metrics/metrics.js');
+const { formatPrometheusText } = require('../metrics/prometheus-exporter.js');
 
 
 function requireBotAuth(req, res, next) {
@@ -23,6 +25,16 @@ function requireBotAuth(req, res, next) {
 
 
 const app = express();
+
+// Prometheus scrape (no auth — same pattern as STT wrapper /metrics; protect via network).
+app.get('/metrics', (req, res) => {
+	try {
+		const body = formatPrometheusText(appMetrics.getSnapshot());
+		res.status(200).type('text/plain; version=0.0.4; charset=utf-8').send(body);
+	} catch (error) {
+		res.status(500).type('text/plain; charset=utf-8').send(`${error.message}\n`);
+	}
+});
 
 app.use(express.json());
 app.use(requireBotAuth);
