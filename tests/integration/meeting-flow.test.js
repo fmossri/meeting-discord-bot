@@ -75,7 +75,6 @@ function createClientWithMocks({ workerOverrides = {}, sessionManagerOverrides =
 	const mockSummaryGen = createMockSummaryGenerator();
 
 	const sessionManager = createSessionManager({
-		sessionStore,
 		createReportGenerator: () => mockReportGen,
 		createSummaryGenerator: () => mockSummaryGen,
 		transcriptWorker: mockWorker,
@@ -268,7 +267,6 @@ describe('meeting flow integration', () => {
 		const mockReportGen = createMockReportGenerator();
 		const mockSummaryGen = createMockSummaryGenerator();
 		const sessionManager = createSessionManager({
-			sessionStore,
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
@@ -303,7 +301,6 @@ describe('meeting flow integration', () => {
 		const mockReportGen = createMockReportGenerator();
 		const mockSummaryGen = createMockSummaryGenerator();
 		const sessionManager = createSessionManager({
-			sessionStore,
 			createReportGenerator: () => mockReportGen,
 			createSummaryGenerator: () => mockSummaryGen,
 			transcriptWorker: mockWorker,
@@ -379,7 +376,6 @@ describe('meeting flow integration', () => {
 			const mockReportGen = createMockReportGenerator();
 			const mockSummaryGen = createMockSummaryGenerator();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => mockReportGen,
 				createSummaryGenerator: () => mockSummaryGen,
 				transcriptWorker: worker,

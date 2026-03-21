@@ -256,7 +256,7 @@ describe('Meeting Controller', () => {
 
 			expect(sessionState.paused).toBe(true);
 			expect(sessionState.timeouts.pauseTimeoutId).not.toBeNull();
-			expect(pauseSessionMock).toHaveBeenCalledWith('session-1');
+			expect(pauseSessionMock).toHaveBeenCalledWith('session-1', true);
 		});
 
 	});

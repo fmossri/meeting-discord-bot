@@ -7,7 +7,6 @@ const COMPONENT = 'session-manager';
 
 function createSessionManager({
     managerConfig,
-    sessionStore,
 	createReportGenerator,
 	createSummaryGenerator,
 	transcriptWorker
@@ -258,7 +257,7 @@ function createSessionManager({
         return true;
     }
 
-    async function pauseSession(sessionId) {
+    async function pauseSession(sessionId, paused) {
         const sessionState = sessionStates.get(sessionId);
         if (!sessionState) {
             logger.error(COMPONENT, 'session_pause_failed', 'Session not found', {
@@ -267,8 +266,7 @@ function createSessionManager({
             });
             return false;
         }
-        const storeSession = sessionStore.getSessionById(sessionId);
-        if (!storeSession?.paused) {
+        if (!paused) {
             return false;
         }
         try {
@@ -285,13 +283,12 @@ function createSessionManager({
         }
     }
 
-	async function startSession(sessionId) {
+	async function startSession(sessionId, meetingData) {
         try {
-            const session = sessionStore.getSessionById(sessionId);
-            if (!session) {
-                logger.error(COMPONENT, 'session_start_failed', 'Session not found', {
+            if (!meetingData) {
+                logger.error(COMPONENT, 'session_start_failed', 'Meeting data not found', {
                     sessionId,
-                    errorClass: 'SessionNotFound',
+                    errorClass: 'MeetingDataNotFound',
                 });
                 return false;
             }
@@ -303,10 +300,10 @@ function createSessionManager({
                 chunkingStrategy: chooseChunkingStrategy(managerConfig.chunkerConfig.chunkingStrategy),
 				processingPromise: null,
 				transcriptPath: null,
-				voiceChannelId: session.voiceChannelId,
+				voiceChannelId: meetingData.voiceChannelId,
 				reportGenerator: createReportGenerator(),
 				summaryGenerator: createSummaryGenerator(),
-				participantStates: session.participantStates,
+				participantStates: meetingData.participantStates,
 				meetingStartTimeMs,
 			};
 			sessionStates.set(sessionId, sessionState);

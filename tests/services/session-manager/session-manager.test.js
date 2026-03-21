@@ -11,12 +11,6 @@ const DEFAULT_MANAGER_CONFIG = {
 	},
 };
 
-function createMockSessionStore(session = null) {
-	return {
-		getSessionById: jest.fn().mockReturnValue(session),
-	};
-}
-
 function createMockTranscriptWorker(overrides = {}) {
 	return {
 		startTranscript: jest.fn().mockResolvedValue('/tmp/test-transcript.jsonl'),
@@ -48,11 +42,9 @@ function createSessionWithParticipantStates(participantStates = new Map()) {
 
 describe('Session Manager', () => {
 	describe('startSession', () => {
-		it('returns false and does not call transcriptWorker.startTranscript when session is not in store', async () => {
-			const sessionStore = createMockSessionStore(undefined);
+		it('returns false and does not call transcriptWorker.startTranscript when meetingData is missing', async () => {
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
@@ -65,19 +57,17 @@ describe('Session Manager', () => {
 			expect(transcriptWorker.startTranscript).not.toHaveBeenCalled();
 		});
 
-		it('calls transcriptWorker.startTranscript and returns true when session is in store', async () => {
+		it('calls transcriptWorker.startTranscript and returns true when meetingData is provided', async () => {
 			const session = createSessionWithParticipantStates();
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			const result = await sessionManager.startSession('session-1');
+			const result = await sessionManager.startSession('session-1', session);
 
 			expect(result).toBe(true);
 			expect(transcriptWorker.startTranscript).toHaveBeenCalledTimes(1);
@@ -86,19 +76,17 @@ describe('Session Manager', () => {
 
 		it('returns false when transcriptWorker.startTranscript throws', async () => {
 			const session = createSessionWithParticipantStates();
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker({
 				startTranscript: jest.fn().mockRejectedValue(new Error('start failed')),
 			});
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			const result = await sessionManager.startSession('session-1');
+			const result = await sessionManager.startSession('session-1', session);
 
 			expect(result).toBe(false);
 		});
@@ -106,9 +94,7 @@ describe('Session Manager', () => {
 
 	describe('closeSession', () => {
 		it('returns false when session was never started', async () => {
-			const sessionStore = createMockSessionStore(createSessionWithParticipantStates());
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker: createMockTranscriptWorker(),
@@ -121,19 +107,17 @@ describe('Session Manager', () => {
 
 		it('awaits processing, calls closeTranscript and generators, deletes session, and returns reportPath and summary', async () => {
 			const session = createSessionWithParticipantStates(new Map([['u1', { displayName: 'Alice' }]]));
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const mockReportPath = '/tmp/report.md';
 			const mockSummaryText = 'Summary text.';
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(mockReportPath),
 				createSummaryGenerator: () => createMockSummaryGenerator(mockSummaryText),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			const result = await sessionManager.closeSession('session-1');
 
 			expect(transcriptWorker.closeTranscript).toHaveBeenCalledWith('session-1', expect.objectContaining({
@@ -149,29 +133,25 @@ describe('Session Manager', () => {
 
 		it('throws when transcriptWorker.closeTranscript throws', async () => {
 			const session = createSessionWithParticipantStates();
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker({
 				closeTranscript: jest.fn().mockRejectedValue(new Error('close failed')),
 			});
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 
 			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('close failed');
 		});
 
 		it('throws when reportGenerator.generateReport throws (e.g. empty transcript)', async () => {
 			const session = createSessionWithParticipantStates(new Map([['u1', { displayName: 'Alice' }]]));
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => ({
 					generateReport: jest.fn().mockRejectedValue(new Error('Transcript has no segments; cannot generate report.')),
 					insertSummary: jest.fn().mockResolvedValue(undefined),
@@ -181,7 +161,7 @@ describe('Session Manager', () => {
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 
 			await expect(sessionManager.closeSession('session-1')).rejects.toThrow('Transcript has no segments');
 		});
@@ -189,11 +169,8 @@ describe('Session Manager', () => {
 
 	describe('chunkStream', () => {
 		it('returns false when session is not in sessionStates', () => {
-			const session = createSessionWithParticipantStates(new Map([['u1', { displayName: 'A', pcmStream: { on: jest.fn() }, chunkerState: {} }]]));
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
@@ -209,17 +186,15 @@ describe('Session Manager', () => {
 		it('returns false when participant is not in participantStates', async () => {
 			const participantStates = new Map();
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			const result = sessionManager.chunkStream('session-1', 'nonexistent');
 
 			expect(result).toBe(false);
@@ -244,17 +219,15 @@ describe('Session Manager', () => {
 				],
 			]);
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
@@ -290,17 +263,15 @@ describe('Session Manager', () => {
 				],
 			]);
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
@@ -333,17 +304,15 @@ describe('Session Manager', () => {
 			};
 			const participantStates = new Map([['u1', participantState]]);
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
@@ -370,16 +339,14 @@ describe('Session Manager', () => {
 			};
 			const participantStates = new Map([['u1', participantState]]);
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			// Data handler sets chunkClockTimeMs on first data; cutChunk uses that then updates state.
@@ -418,7 +385,6 @@ describe('Session Manager', () => {
 					],
 				]);
 				const session = createSessionWithParticipantStates(participantStates);
-				const sessionStore = createMockSessionStore(session);
 				const transcriptWorker = createMockTranscriptWorker({
 					enqueueChunk: jest.fn()
 						.mockRejectedValueOnce(new Error('worker busy'))
@@ -426,14 +392,13 @@ describe('Session Manager', () => {
 						.mockResolvedValueOnce(undefined),
 				});
 				const sessionManager = createSessionManager({
-					sessionStore,
 					createReportGenerator: () => createMockReportGenerator(),
 					createSummaryGenerator: () => createMockSummaryGenerator(),
 					transcriptWorker,
 					managerConfig: DEFAULT_MANAGER_CONFIG,
 				});
 
-				await sessionManager.startSession('session-1');
+				await sessionManager.startSession('session-1', session);
 				sessionManager.chunkStream('session-1', 'u1');
 				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
 				pcmStream.emit('data', Buffer.alloc(0));
@@ -470,19 +435,17 @@ describe('Session Manager', () => {
 					],
 				]);
 				const session = createSessionWithParticipantStates(participantStates);
-				const sessionStore = createMockSessionStore(session);
 				const transcriptWorker = createMockTranscriptWorker({
 					enqueueChunk: jest.fn().mockRejectedValue(new Error('worker down')),
 				});
 				const sessionManager = createSessionManager({
-					sessionStore,
 					createReportGenerator: () => createMockReportGenerator(),
 					createSummaryGenerator: () => createMockSummaryGenerator(),
 					transcriptWorker,
 					managerConfig: DEFAULT_MANAGER_CONFIG,
 				});
 
-				await sessionManager.startSession('session-1');
+				await sessionManager.startSession('session-1', session);
 				sessionManager.chunkStream('session-1', 'u1');
 				pcmStream.emit('data', Buffer.alloc(TARGET_BYTES));
 				pcmStream.emit('data', Buffer.alloc(0));
@@ -526,17 +489,15 @@ describe('Session Manager', () => {
 			};
 			const participantStates = new Map([['u1', participantState]]);
 			const session = createSessionWithParticipantStates(participantStates);
-			const sessionStore = createMockSessionStore(session);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', session);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			// Provide enough PCM for two full chunks in a single data event
@@ -559,51 +520,41 @@ describe('Session Manager', () => {
 
 	describe('pauseSession', () => {
 		function createRunningSessionManager({
-			storeSessionPaused = true,
 			participantStates = new Map(),
 			transcriptWorkerOverrides = {},
 		} = {}) {
-			const storeSession = {
-				voiceChannelId: 'voice-123',
-				participantStates,
-				paused: storeSessionPaused,
-			};
-			const sessionStore = createMockSessionStore(storeSession);
+			const meetingData = createSessionWithParticipantStates(participantStates);
 			const transcriptWorker = createMockTranscriptWorker(transcriptWorkerOverrides);
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
-			return { sessionManager, transcriptWorker, sessionStore };
+			return { sessionManager, transcriptWorker, meetingData };
 		}
 
 		it('returns false when session was never started (no session state found)', async () => {
-			const sessionStore = createMockSessionStore(createSessionWithParticipantStates());
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: DEFAULT_MANAGER_CONFIG,
 			});
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 
 			expect(result).toBe(false);
 		});
 
-		it('returns false when store session is not paused', async () => {
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: false,
+		it('returns false when paused argument is false', async () => {
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates: new Map([['u1', { displayName: 'Alice', chunkerState: {} }]]),
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', false);
 
 			expect(result).toBe(false);
 			expect(transcriptWorker.enqueueChunk).not.toHaveBeenCalled();
@@ -613,13 +564,12 @@ describe('Session Manager', () => {
 			const participantStates = new Map([
 				['u1', { displayName: 'Alice' }],
 			]);
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 
 			expect(result).toBe(true);
 			expect(transcriptWorker.enqueueChunk).not.toHaveBeenCalled();
@@ -637,13 +587,12 @@ describe('Session Manager', () => {
 				},
 			};
 			const participantStates = new Map([['u1', participantState]]);
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
@@ -674,13 +623,12 @@ describe('Session Manager', () => {
 				},
 			};
 			const participantStates = new Map([['u1', participantState]]);
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 			await new Promise((r) => setImmediate(r));
 
 			expect(result).toBe(true);
@@ -713,13 +661,12 @@ describe('Session Manager', () => {
 				['u1', participantStateWithClock],
 				['u2', participantStateNoClock],
 			]);
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			await sessionManager.pauseSession('session-1');
+			await sessionManager.pauseSession('session-1', true);
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
@@ -755,13 +702,12 @@ describe('Session Manager', () => {
 				['u2', p2],
 				['u3', p3],
 			]);
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));
 
@@ -777,13 +723,12 @@ describe('Session Manager', () => {
 
 		it('returns true when participantStates is empty', async () => {
 			const participantStates = new Map();
-			const { sessionManager, transcriptWorker } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, transcriptWorker, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			const result = await sessionManager.pauseSession('session-1');
+			const result = await sessionManager.pauseSession('session-1', true);
 
 			expect(result).toBe(true);
 			expect(transcriptWorker.enqueueChunk).not.toHaveBeenCalled();
@@ -800,13 +745,12 @@ describe('Session Manager', () => {
 				},
 			};
 			const participantStates = new Map([['u1', participantState]]);
-			const { sessionManager } = createRunningSessionManager({
-				storeSessionPaused: true,
+			const { sessionManager, meetingData } = createRunningSessionManager({
 				participantStates,
 			});
-			await sessionManager.startSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
 
-			await expect(sessionManager.pauseSession('session-1')).rejects.toThrow();
+			await expect(sessionManager.pauseSession('session-1', true)).rejects.toThrow();
 		});
 	});
 
@@ -847,22 +791,20 @@ describe('Session Manager', () => {
 					},
 				}],
 			]);
-			const session = { voiceChannelId: 'voice-123', participantStates };
-			const sessionStore = createMockSessionStore(session);
+			const meetingData = createSessionWithParticipantStates(participantStates);
 			const transcriptWorker = createMockTranscriptWorker(overrides.transcriptWorkerOverrides);
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: SILENCE_CONFIG,
 			});
-			return { sessionManager, transcriptWorker, pcmStream, participantStates };
+			return { sessionManager, transcriptWorker, pcmStream, participantStates, meetingData };
 		}
 
 		it('Tier 1: cuts at silence boundary when buffer > minSamples and tail goes silent', async () => {
-			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
-			await sessionManager.startSession('session-1');
+			const { sessionManager, transcriptWorker, pcmStream, meetingData } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1', meetingData);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			const loud = createConstantBuffer(101, 10000);
@@ -882,8 +824,8 @@ describe('Session Manager', () => {
 		});
 
 		it('Tier 1: does not cut when buffer > minSamples but tail is loud', async () => {
-			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
-			await sessionManager.startSession('session-1');
+			const { sessionManager, transcriptWorker, pcmStream, meetingData } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1', meetingData);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', createConstantBuffer(200, 10000));
@@ -895,8 +837,8 @@ describe('Session Manager', () => {
 		});
 
 		it('Tier 2: forces cut when buffer hits maxSamples without silence', async () => {
-			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
-			await sessionManager.startSession('session-1');
+			const { sessionManager, transcriptWorker, pcmStream, meetingData } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1', meetingData);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			pcmStream.emit('data', createConstantBuffer(8000, 10000));
@@ -909,8 +851,8 @@ describe('Session Manager', () => {
 		});
 
 		it('Tier 3: cuts stale buffer after idle timeout', async () => {
-			const { sessionManager, transcriptWorker, pcmStream } = createSilenceBasedSessionManager();
-			await sessionManager.startSession('session-1');
+			const { sessionManager, transcriptWorker, pcmStream, meetingData } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1', meetingData);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			// Emit small loud buffer (below minSamples, so Tier 1 won't fire)
@@ -935,8 +877,8 @@ describe('Session Manager', () => {
 			const appMetrics = require('../../../services/metrics/metrics.js');
 			const observeSpy = jest.spyOn(appMetrics, 'observe');
 
-			const { sessionManager, pcmStream } = createSilenceBasedSessionManager();
-			await sessionManager.startSession('session-1');
+			const { sessionManager, pcmStream, meetingData } = createSilenceBasedSessionManager();
+			await sessionManager.startSession('session-1', meetingData);
 			sessionManager.chunkStream('session-1', 'u1');
 
 			// Emit 111 samples with silent tail → Tier 1 cuts 111 samples
@@ -970,19 +912,17 @@ describe('Session Manager', () => {
 				},
 			};
 			const participantStates = new Map([['u1', participantState]]);
-			const storeSession = { voiceChannelId: 'voice-123', participantStates, paused: true };
-			const sessionStore = createMockSessionStore(storeSession);
+			const meetingData = createSessionWithParticipantStates(participantStates);
 			const transcriptWorker = createMockTranscriptWorker();
 			const sessionManager = createSessionManager({
-				sessionStore,
 				createReportGenerator: () => createMockReportGenerator(),
 				createSummaryGenerator: () => createMockSummaryGenerator(),
 				transcriptWorker,
 				managerConfig: SILENCE_CONFIG,
 			});
 
-			await sessionManager.startSession('session-1');
-			const result = await sessionManager.pauseSession('session-1');
+			await sessionManager.startSession('session-1', meetingData);
+			const result = await sessionManager.pauseSession('session-1', true);
 
 			await new Promise((r) => setImmediate(r));
 			await new Promise((r) => setImmediate(r));

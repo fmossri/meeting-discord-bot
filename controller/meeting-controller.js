@@ -189,7 +189,11 @@ function createMeetingController(controllerConfig, sessionStore) {
             }, meetingTimeouts.explicitPauseMs);
         }
         if (!sessionState.started) {
-            const started = await interaction.client.sessionManager.startSession(sessionId);
+            const sessionData = {
+                participantStates: sessionState.participantStates,
+                voiceChannelId: sessionState.voiceChannelId,
+            }
+            const started = await interaction.client.sessionManager.startSession(sessionId, sessionData);
             if (!started) {
                 logger.error(COMPONENT, 'participant_accept_failed', 'Failed to start session for participant', {
                     sessionId,
@@ -604,7 +608,7 @@ function createMeetingController(controllerConfig, sessionStore) {
             stopVoiceCapture(sessionId);
             const client = sessionState.originalInteraction.client;
             sessionState.paused = true;
-            const paused = await client.sessionManager.pauseSession(sessionId);
+            const paused = await client.sessionManager.pauseSession(sessionId, sessionState.paused);
             if (!paused) {
                 sessionState.paused = false;
                 logger.error(COMPONENT, 'session_pause_failed', 'Session manager did not acknowledge pause', {

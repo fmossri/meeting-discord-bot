@@ -45,7 +45,6 @@ const transcriptWorker = getTranscriptWorker({
 
 client.sessionManager = createSessionManager({
     managerConfig: config.managerConfig, 
-    sessionStore,
     createReportGenerator,
     createSummaryGenerator,
     transcriptWorker,
