@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "jest",
-    "run": "node scripts/tsummix.js run",
+    "start": "node scripts/tsummix.js run",
     "start:bot": "node scripts/tsummix.js run bot",
     "start:stt": "node scripts/tsummix.js run stt",
     "debug:voice": "DEBUG=@discordjs/voice:* node scripts/tsummix.js run bot"
