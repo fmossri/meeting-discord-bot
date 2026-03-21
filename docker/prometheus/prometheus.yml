@@ -1,0 +1,22 @@
+# Tsummix scrape targets (Docker Compose service DNS names).
+# Used when merging docker-compose.<env>.yml with docker-compose.observe.yml.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tsummix-bot
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["bot:9091"]
+
+  - job_name: tsummix-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:3000"]
+
+  - job_name: tsummix-stt-wrapper
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["stt-wrapper:8000"]
