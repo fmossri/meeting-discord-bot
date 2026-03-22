@@ -9,7 +9,9 @@
  *   tsummix run bot                   → only Node bot
  *   tsummix run stt                   → only STT wrapper (Python)
  *   tsummix run worker                → only transcript worker HTTP server (Node)
- *   tsummix run dev [-d] [-o]         → docker compose (docker-compose.dev.yml); -o merges docker-compose.observe.yml (Prometheus + Grafana)
+ *   tsummix run [-o]                  → local processes + optional Docker obs stack only (prometheus/grafana/loki/promtail scrape host metrics)
+ *   tsummix run bot|stt|worker [-o]   → one local process + optional obs stack
+ *   tsummix run dev [-d] [-o]         → docker compose (docker-compose.dev.yml); -o merges docker-compose.observe.yml (Prometheus + Grafana + Loki + Promtail)
  *   tsummix run prod [-d] [-o]        → docker compose (docker-compose.prod.yml)
  *
  * Long flags: --distribute, --observe
@@ -19,10 +21,80 @@
  * installed when using dev/prod.
  */
 
-const { spawn } = require('node:child_process');
+const { execSync, spawn } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
+const lockPath = path.join(root, '.tsummix.lock');
+
+/**
+ * One `tsummix run` per repo root at a time (PID file + stale detection).
+ */
+function isPidRunning(pid) {
+	if (!Number.isInteger(pid) || pid <= 0) {
+		return false;
+	}
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function acquireTsummixLock() {
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const fd = fs.openSync(lockPath, 'wx');
+			fs.writeSync(fd, `${process.pid}\n`);
+			fs.closeSync(fd);
+			const release = () => {
+				try {
+					const cur = fs.readFileSync(lockPath, 'utf8').trim();
+					if (cur === String(process.pid)) {
+						fs.unlinkSync(lockPath);
+					}
+				} catch {
+					// ignore
+				}
+			};
+			process.once('exit', release);
+			process.once('SIGINT', () => {
+				release();
+				process.exit(130);
+			});
+			process.once('SIGTERM', () => {
+				release();
+				process.exit(143);
+			});
+			return;
+		} catch (e) {
+			if (e && e.code !== 'EEXIST') {
+				throw e;
+			}
+			let pid = NaN;
+			try {
+				pid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+			} catch {
+				// corrupt or race
+			}
+			if (Number.isInteger(pid) && isPidRunning(pid)) {
+				console.error(
+					`tsummix: another instance is already running (PID ${pid}). Stop it first, or delete ${lockPath} if the process crashed.`,
+				);
+				process.exit(1);
+			}
+			try {
+				fs.unlinkSync(lockPath);
+			} catch {
+				// retry
+			}
+		}
+	}
+	console.error('tsummix: could not acquire lock');
+	process.exit(1);
+}
 const args = process.argv.slice(2);
 const sub = args[0]; // "run"
 const rest = args.slice(1);
@@ -101,6 +173,27 @@ function runBoth() {
 	});
 }
 
+const observeLocalComposeFile = 'docker-compose.observe-local.yml';
+
+/**
+ * Starts Prometheus + Grafana + Loki + Promtail in Docker (detached) for local-on-host runs.
+ * Scrapes host metrics via `docker/prometheus/prometheus.host.yml` (host.docker.internal).
+ * Does not run when `dev`/`prod` Compose is used — those merge docker-compose.observe.yml instead.
+ */
+function startObsStackLocal() {
+	execSync(`docker compose -f ${observeLocalComposeFile} up -d`, {
+		cwd: root,
+		stdio: 'inherit',
+		shell: isWin,
+	});
+	console.error(
+		`Observability: Prometheus :9090, Grafana :3001, Loki :3100 (docker compose -f ${observeLocalComposeFile} down to stop).`,
+	);
+	console.error(
+		'Host metrics: set BOT_METRICS_PORT (e.g. 9091) for bot /metrics. Promtail only collects Docker container logs, not host stdout.',
+	);
+}
+
 function runDistribute() {
 	// Worker HTTP server
 	const workerProc = runWorker();
@@ -133,7 +226,7 @@ function runDistribute() {
 /**
  * @param {string} file docker-compose file name
  * @param {boolean} distribute
- * @param {boolean} observe merge docker-compose.observe.yml (Prometheus + Grafana)
+ * @param {boolean} observe merge docker-compose.observe.yml (Prometheus + Grafana + Loki + Promtail)
  */
 function runCompose(file, distribute, observe) {
 	const composeArgs = ['compose', '-f', file];
@@ -142,12 +235,20 @@ function runCompose(file, distribute, observe) {
 	}
 	composeArgs.push('up');
 
+	// Without -d: pin services so "observe" does not start worker (in-process worker layout).
+	// With -d: pass no service names → Compose starts every service (bot, worker, stt-wrapper, loki, promtail, prometheus, grafana).
 	if (observe && !distribute) {
-		composeArgs.push('bot', 'stt-wrapper', 'prometheus', 'grafana');
+		composeArgs.push(
+			'bot',
+			'stt-wrapper',
+			'loki',
+			'promtail',
+			'prometheus',
+			'grafana',
+		);
 	} else if (!observe && !distribute) {
 		composeArgs.push('bot', 'stt-wrapper');
 	}
-	// distribute: no service list → start all services in merged compose
 
 	const child = spawn('docker', composeArgs, {
 		cwd: root,
@@ -166,14 +267,13 @@ if (sub !== 'run') {
 	process.exit(1);
 }
 
-if (hasObserveFlag && (!target || (target !== 'dev' && target !== 'prod'))) {
-	console.warn(
-		'tsummix: --observe (-o) only applies to "tsummix run dev" or "tsummix run prod" (Docker Compose). Ignored for local processes.',
-	);
-}
+acquireTsummixLock();
 
 if (!target) {
 	// tsummix run → local bot + STT wrapper
+	if (hasObserveFlag) {
+		startObsStackLocal();
+	}
 	if (hasDistributeFlag) {
 		// tsummix run --distribute → local bot + worker + STT wrapper
 		runDistribute();
@@ -181,10 +281,19 @@ if (!target) {
 		runBoth();
 	}
 } else if (target === 'bot') {
+	if (hasObserveFlag) {
+		startObsStackLocal();
+	}
 	runBot();
 } else if (target === 'stt') {
+	if (hasObserveFlag) {
+		startObsStackLocal();
+	}
 	runSTT();
 } else if (target === 'worker') {
+	if (hasObserveFlag) {
+		startObsStackLocal();
+	}
 	runWorker();
 } else if (target === 'dev') {
 	runCompose('docker-compose.dev.yml', hasDistributeFlag, hasObserveFlag);

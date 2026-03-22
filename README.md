@@ -33,7 +33,7 @@ A Discord bot that implements STT and summarization capabilities.
 
 ### Observability (logs + in-process metrics)
 
-- Structured JSON logs emitted to stdout via `services/logger/logger.js`. Set `LOG_LEVEL` to control verbosity (`debug` | `info` | `warn` | `error` | `silent`; default `info` when unset or invalid). Use `silent` to disable all log output (e.g. in tests).
+- Structured JSON logs via `services/logger/logger.js` (stdout and/or rotated files under `LOG_FILE_DIR`). Set `LOG_LEVEL` to control verbosity (`debug` | `info` | `warn` | `error` | `silent`; default `info` when unset or invalid). Use `silent` to disable all log output (e.g. in tests). With Docker observe, **`LOG_TO_STDOUT=false`** and **`LOG_FILE_DIR=/var/log/tsummix`** avoid duplicating the same JSON in Loki (Promtail reads files + Docker logs).
 - Minimal in-process metrics via `services/metrics/metrics.js` (counters, gauges, histograms) updated alongside log calls. Each process can expose **Prometheus** text at **`GET /metrics`**: the bot (when `BOT_METRICS_PORT` is set), the transcript worker HTTP server, and the STT wrapper. With **`WORKER_USE_LOCAL=true`**, all Node metrics live in the bot process, so you need the bot’s `/metrics` enabled for Prometheus to scrape Node series; with **`WORKER_USE_LOCAL=false`**, scrape both bot and worker. Includes:
   - `worker_queue_depth` (gauge)
   - `stt_latency_ms` (histogram)
@@ -123,6 +123,11 @@ Copy `.env-example` to `.env` and set:
 | `WORKER_AUTH_TOKEN`        | Shared secret for Bot ↔ Worker auth. Required when `WORKER_USE_LOCAL=false`. Must match in both Bot and Worker containers. |
 | `STT_AUTH_TOKEN`           | Shared secret for Worker ↔ STT Wrapper auth. Required in all non-local deployments. Must match in both Worker and Wrapper containers. |
 | `LOG_LEVEL`                | Log level for structured JSON logs: `debug`, `info`, `warn`, `error`, or `silent`. Default `info` if unset or invalid. |
+| `LOG_FILE_DIR`             | Optional. Directory for rotated JSON logs (`rotating-file-stream`). Unset = stdout only. In Compose observe, use with `LOG_TO_STDOUT=false` to avoid duplicate lines in Loki. |
+| `LOG_FILE_NAME`            | Optional. Log file basename (default `tsummix.log`). Use distinct names per bot vs worker in Compose (`bot.log`, `worker.log`). |
+| `LOG_FILE_MAX_SIZE`        | Optional. Rotation size (default `10M`). |
+| `LOG_FILE_MAX_FILES`       | Optional. Max rotated files to keep (default `14`). |
+| `LOG_TO_STDOUT`            | Optional. When `LOG_FILE_DIR` is set, defaults to `false` so Docker + Promtail do not duplicate JSON; set `true` for console + file (may duplicate in Loki if both Docker and file scrape apply). |
 | `BOT_METRICS_PORT`         | If set, the bot process serves **`GET /metrics`** (Prometheus) on this port. Default bind is loopback (`127.0.0.1`); override with `BOT_METRICS_BIND`. Unset = no metrics HTTP server. **Required for Prometheus to scrape Node metrics when `WORKER_USE_LOCAL=true`** (in-process worker). |
 | `BOT_METRICS_BIND`         | Address the bot’s `/metrics` listener binds to (default `127.0.0.1`). Use `0.0.0.0` when Prometheus runs in Docker and must reach the bot on the host network. |
 | `STT_MODEL_ID`             | Model to load: built-in size (e.g. `medium`), HF repo id (e.g. `dwhoelz/whisper-medium-pt-ct2`), or local path to a CTranslate2 model dir |
@@ -170,23 +175,24 @@ Copy `.env-example` to `.env` and set:
    npm run start:bot      # only Node bot
    npm run start:stt      # only STT wrapper
    ```
-   To run from the shell without `npm`, link once: `npm link`. Then you can use:
-   ```bash
-   # Local, no Docker
-   tsummix run                 # bot + STT wrapper, worker in-process
-   tsummix run --distribute    # bot + worker HTTP server + STT wrapper (worker over HTTP)
-   tsummix run -d              # same as --distribute
-   tsummix run bot             # only Node bot
-   tsummix run stt             # only STT wrapper
-   tsummix run worker          # only transcript worker HTTP server
+   To run from the shell without `npm`, link once: `npm link`. Only one **`tsummix run`** per clone (`.tsummix.lock`; delete if a run crashed).
 
-   # Docker / Compose
-   tsummix run dev             # docker-compose.dev.yml (bot + stt-wrapper)
-   tsummix run dev -o          # merge docker-compose.observe.yml (Prometheus + Grafana)
-   tsummix run dev --distribute   # bot + worker + stt-wrapper
-   tsummix run dev -do         # distribute + observe overlay
-   tsummix run prod            # docker-compose.prod.yml (bot + stt-wrapper)
-   tsummix run prod --distribute  # bot + worker + stt-wrapper
+   ```text
+   tsummix run [bot|stt|worker|dev|prod] [--distribute|-d] [--observe|-o]
+   ```
+
+   | Flag | Meaning |
+   |------|---------|
+   | `-d` / `--distribute` | Transcript worker over HTTP (separate Node process) instead of in-process. |
+   | `-o` / `--observe` | Prometheus, Grafana, Loki, Promtail. **Local:** `docker-compose.observe-local.yml` (detached), then your processes. **`dev` / `prod`:** merge `docker-compose.observe.yml`. |
+
+   Short flags combine (e.g. **`-do`**). **`dev`** = `docker-compose.dev.yml`; **`prod`** = `docker-compose.prod.yml`.
+
+   ```bash
+   tsummix run                 # bot + STT, worker in-process, no Docker
+   tsummix run -do             # local: distributed + observability
+   tsummix run dev -o          # compose dev + observability
+   tsummix run prod -do        # compose prod + distributed + observability
    ```
 
 **Tests:** `npm test` (Jest; unit and integration tests, mocks for Discord/STT/LLM). By default tests set `LOG_LEVEL=silent` so no JSON log lines are printed; override with `LOG_LEVEL=info npm test` when debugging. For the Python STT wrapper, with your venv activated:
@@ -258,7 +264,8 @@ pytest tests/stt_wrapper/test_app.py
 | `stt_wrapper/prometheus_metrics.py` | Wrapper Prometheus metrics (`prometheus_client`); scrape without auth — protect via network |
 | `scripts/stt-wrapper/model_benchmark.py` | Python model benchmark: measure faster-whisper latency for different configs (no HTTP) |
 | `scripts/stt-wrapper/smoke_stt_wrapper.py` | Manual smoke test for the STT wrapper HTTP API (`/health`, `/transcribe`) |
-| `services/logger/logger.js` | Structured JSON logger (stdout) with `LOG_LEVEL` filtering |
+| `services/logger/logger.js` | Structured JSON logger; stdout and/or rotated files (`LOG_FILE_*`); `rotating-file-stream` |
+| `services/logger/file-sink.js` | Rotating file sink for Promtail/Loki |
 | `services/metrics/metrics.js` | In-process metrics (counters/gauges/histograms) for observability |
 | `services/metrics/prometheus-exporter.js` | Prometheus text exposition from `getSnapshot()`; bot `GET /metrics` when `BOT_METRICS_PORT` is set (`BOT_METRICS_BIND`, default `127.0.0.1`) |
 | `services/transcript-worker/transcript-worker.js` | Transcript worker: per-transcript queue, STT client, JSONL transcript lifecycle |
@@ -271,9 +278,12 @@ pytest tests/stt_wrapper/test_app.py
 | `services/session-manager/chunking/choose-strategy.js` | Chunking strategy selector and implementations (`fixedSize`, `silenceBased`) plus audio helpers (`calculateRMS`, `checkRecentSilence`, `findLowestEnergyPoint`). |
 | `services/session-manager/convert-pcm-to-wav.js` | Helper: raw PCM buffer → WAV (16 kHz mono); used by session manager chunker. |
 | `scripts/tsummix.js` | CLI: `tsummix run` (local), `tsummix run dev/prod [-d] [-o]` (compose + optional Prometheus/Grafana overlay), worker-only. Use after `npm link`. |
-| `docker-compose.observe.yml` | Optional merge: Prometheus + Grafana; use with `tsummix run dev/prod -o` |
-| `docker/prometheus/prometheus.yml` | Scrape targets for bot, worker, and STT wrapper on the Compose network |
-| `docker/grafana/provisioning/` | Grafana datasource provisioning (Prometheus) |
+| `docker-compose.observe.yml` | Optional merge: Prometheus, Grafana, Loki, Promtail; use with `tsummix run dev/prod -o` |
+| `docker-compose.observe-local.yml` | Observability stack only (Docker); use with `tsummix run -o` / `bot -o` / … for host-scraped metrics |
+| `docker/prometheus/prometheus.yml` | Scrape targets when the app runs in Compose (service DNS names) |
+| `docker/prometheus/prometheus.host.yml` | Scrape targets when the app runs on the host (`host.docker.internal`) |
+| `docker/promtail/promtail-config.yaml` | Promtail: Docker log discovery → Loki (requires Docker socket mount) |
+| `docker/grafana/provisioning/` | Grafana datasource provisioning (Prometheus + Loki) |
 | `tests/jest.setup.js` | Jest setup: default `LOG_LEVEL=silent` so test output stays readable |
 | `requirements.txt` | Python deps (FastAPI, faster-whisper, etc.) |
 | `.env-example` | Example env vars (Discord + STT); copy to `.env` |

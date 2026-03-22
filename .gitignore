@@ -6,6 +6,13 @@ node_modules/
 .env
 .env.local
 
+# tsummix single-instance lock (scripts/tsummix.js)
+.tsummix.lock
+
+# Rotated logs (keep logs/.gitkeep)
+logs/*.log
+logs/*.log.*
+
 # Editor / IDE / OS
 .cursor/
 .cursorrules
