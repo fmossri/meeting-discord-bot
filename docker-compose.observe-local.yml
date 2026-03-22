@@ -1,0 +1,65 @@
+# Observability stack only — for use while Tsummix app runs on the host (not in Compose).
+#   docker compose -f docker-compose.observe-local.yml up -d
+# Or: tsummix run -o  (with any local target: bot, stt, worker, -d, or default)
+#
+# Prometheus scrapes metrics on the host via host.docker.internal (Linux: extra_hosts host-gateway).
+# Set BOT_METRICS_PORT=9091 (and bind 0.0.0.0 if needed) so the bot exposes /metrics to Docker.
+#
+# Promtail: Docker SD + ./logs → /var/log/tsummix (bind mount). Set LOG_FILE_DIR=./logs (or absolute)
+# on the host when using the Node file sink; keep LOG_TO_STDOUT=false to avoid duplicate lines if you
+# also scrape Docker logs for the same process.
+
+version: "3.9"
+
+services:
+  loki:
+    image: grafana/loki:2.9.8
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data-local:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    volumes:
+      - ./docker/promtail/promtail-config.yaml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-positions-local:/promtail
+      - ./logs:/var/log/tsummix:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./docker/prometheus/prometheus.host.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data-local:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data-local:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+
+volumes:
+  loki-data-local:
+  prometheus-data-local:
+  promtail-positions-local:
+  grafana-data-local:

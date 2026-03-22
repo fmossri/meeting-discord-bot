@@ -2,15 +2,40 @@
 #   docker compose -f docker-compose.dev.yml -f docker-compose.observe.yml up
 # Or: tsummix run dev --observe  (or -o)
 #
-# Adds Prometheus + Grafana and enables bot metrics (BOT_METRICS_*) for in-network scraping.
+# Adds Prometheus + Grafana, Loki + Promtail (container logs → Loki), and enables
+# bot metrics (BOT_METRICS_*) for in-network scraping.
+#
+# Promtail reads the Docker socket and /var/log/tsummix/*.log (rotated JSON from Node + STT wrapper).
+# Set LOG_FILE_DIR + LOG_TO_STDOUT=false on bot/worker/stt-wrapper to avoid duplicate lines in Loki.
+# On Windows Docker Desktop, paths may differ; adjust the promtail socket mount if needed.
 
 version: "3.9"
 
 services:
+  loki:
+    image: grafana/loki:2.9.8
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    volumes:
+      - ./docker/promtail/promtail-config.yaml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - promtail-positions:/promtail
+      - tsummix-logs:/var/log/tsummix:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
   prometheus:
     image: prom/prometheus:v2.54.1
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
     ports:
       - "9090:9090"
     command:
@@ -26,12 +51,42 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+      - loki
 
   bot:
     environment:
       BOT_METRICS_PORT: "9091"
       BOT_METRICS_BIND: "0.0.0.0"
+      LOG_FILE_DIR: /var/log/tsummix
+      LOG_FILE_NAME: bot.log
+      LOG_TO_STDOUT: "false"
+    volumes:
+      - tsummix-logs:/var/log/tsummix
     expose:
       - "9091"
+
+  worker:
+    environment:
+      LOG_FILE_DIR: /var/log/tsummix
+      LOG_FILE_NAME: worker.log
+      LOG_TO_STDOUT: "false"
+    volumes:
+      - tsummix-logs:/var/log/tsummix
+
+  stt-wrapper:
+    environment:
+      LOG_FILE_DIR: /var/log/tsummix
+      LOG_FILE_NAME: stt-wrapper.log
+      LOG_TO_STDOUT: "false"
+    volumes:
+      - tsummix-logs:/var/log/tsummix
+
+volumes:
+  loki-data:
+  prometheus-data:
+  promtail-positions:
+  grafana-data:
+  tsummix-logs:

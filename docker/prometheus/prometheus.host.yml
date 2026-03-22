@@ -1,0 +1,23 @@
+# Prometheus scrape targets when Tsummix runs on the host (not in Compose).
+# Used by docker-compose.observe-local.yml — Prometheus runs in Docker and reaches the
+# host via host.docker.internal (see extra_hosts on the prometheus service).
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: tsummix-bot
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:9091"]
+
+  - job_name: tsummix-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:3000"]
+
+  - job_name: tsummix-stt-wrapper
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
