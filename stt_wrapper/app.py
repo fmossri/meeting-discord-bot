@@ -3,7 +3,7 @@ import sys
 import io
 import time
 import base64
-import traceback
+import logging
 import threading
 import wave
 from contextlib import asynccontextmanager
@@ -18,6 +18,8 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 import cuda_env  # noqa: E402 — set LD_LIBRARY_PATH before faster_whisper
+
+_log = logging.getLogger(__name__)
 
 from .prometheus_metrics import (
     metrics_response,
@@ -51,6 +53,10 @@ class TranscribeResponse(BaseModel):
 
 load_dotenv()
 
+from .logging_setup import configure_logging  # noqa: E402 — after dotenv
+
+configure_logging()
+
 model_id = os.getenv("STT_MODEL_ID")
 download_path = os.getenv("STT_DOWNLOAD_PATH")
 raw = os.getenv("STT_USE_LOCAL", "")
@@ -58,11 +64,12 @@ use_local = raw.strip().lower() == "true"
 device_flag = os.getenv("STT_DEVICE") if os.getenv("STT_DEVICE") else "auto"
 language_flag = os.getenv("STT_LANGUAGE") if os.getenv("STT_LANGUAGE") else ""
 
-STT_AUTH_TOKEN = os.getenv("STT_AUTH_TOKEN")
+_raw_stt_auth = os.getenv("STT_AUTH_TOKEN")
+STT_AUTH_TOKEN = (_raw_stt_auth or "").strip() or None
 
 def verify_worker_auth(internal_stt_auth: str | None = Header(None, alias="Internal-Stt-Auth")):
     if STT_AUTH_TOKEN is None:
-        return  # auth disabled (local dev)
+        return  # auth disabled (local dev, or empty / whitespace in env)
     if internal_stt_auth != STT_AUTH_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized worker client")
 
@@ -86,6 +93,8 @@ def _wav_bytes_to_float32_mono(audio_bytes: bytes) -> tuple[np.ndarray, int]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Re-apply after uvicorn's logging.config (startup banners may still use default format).
+    configure_logging()
     app.state.ready = False
     app.state.model = None
     app.state.model_id = model_id
@@ -102,7 +111,7 @@ async def lifespan(app: FastAPI):
         app.state.ready = True
         stt_wrapper_ready.set(1)
     except Exception:
-        traceback.print_exc()
+        _log.exception("stt_model_load_failed")
         app.state.ready = False
         stt_wrapper_ready.set(0)
     yield
@@ -169,7 +178,7 @@ def transcribe(request: TranscribeRequest) -> TranscribeResponse:
             metrics=metrics)
 
     except Exception as e:
-        traceback.print_exc()
+        _log.exception("transcribe_failed")
         observe_transcribe_error()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
